@@ -1,1 +1,1 @@
-# Benchmark + power monitor orchestrator
+# Benchmark + Power monitor orchestrator
