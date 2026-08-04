@@ -14,6 +14,9 @@ which GPU generations have enough coverage to benchmark.
 - Do not assume the GPU product label key. Discover it from cluster output.
 - Snapshots land in data/raw/ and are gitignored. Summaries go to
   data/processed/ and are committed.
+- Access is list-only on nodes. `kubectl auth can-i list nodes` is yes but
+  `get nodes` is no, so `kubectl describe node` and `kubectl get node <name>`
+  are Forbidden. Only `kubectl get nodes` (list) is available.
 
 ## Deliverables
 
@@ -29,7 +32,10 @@ which GPU generations have enough coverage to benchmark.
 ## Definition of done
 
 Runs against a real snapshot, prints a readable table, and label assumptions are
-verified against `kubectl describe node` for at least one node.
+verified against a fresh `kubectl get nodes` list for at least one node.
+`kubectl describe node` is Forbidden under the list-only access above, so
+verification compares the script output to the raw fields in a fresh list, which
+is the same API object describe would reformat.
 
 ## Note
 

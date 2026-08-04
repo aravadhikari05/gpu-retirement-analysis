@@ -31,6 +31,12 @@ Collaborator: Arav Adhikari. See README.md for the full structure and flow.
 - UTC timestamps everywhere. Structured output only: JSONL, CSV, or SQLite.
 - Record raw telemetry before computing summaries
 - Keep failed runs with an explicit exclusion reason rather than deleting them
+- The fleet census is a point-in-time snapshot, not a constant. Node labeling
+  drifted by one node within an hour between two captures. Phase 3 benchmark
+  runs must record the GPU model, node name, and driver version observed at
+  runtime from inside the pod, not by joining against a stored census. The
+  census decides which models are worth targeting; it is not the source of
+  truth for what a given run actually used.
 
 ## Working style
 
