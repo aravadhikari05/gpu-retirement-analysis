@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sample-job-aidan
+spec:
+  template:
+    spec:
+      containers:
+      - name: sample-job
+        image: gitlab-registry.nrp-nautilus.io/aidan/aidan:latest
+        command: ["python", "sample_code.py"]
+        env:
+        - name: FILE_NAME
+          value: "/sample-pvc-aidan/tmp.db"
+        - name: THREAD_COUNT
+          value: "10"
+        resources:
+          limits:
+            cpu: 12
+            memory: 1Gi
+          requests:
+            cpu: 12
+            memory: 1Gi
+        volumeMounts:
+        - mountPath: /sample-pvc-aidan
+          name: sample-pvc-aidan
+      restartPolicy: Never
+      volumes:
+        - name: sample-pvc-aidan
+          persistentVolumeClaim:
+            claimName: sample-pvc-aidan
+  backoffLimit: 4
