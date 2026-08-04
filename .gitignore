@@ -10,3 +10,4 @@ __pycache__/
 .s3cfg
 *.env
 kubeconfig*
+.worktrees/
