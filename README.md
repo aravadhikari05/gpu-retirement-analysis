@@ -1,11 +1,11 @@
-# GPU Carbon Break-Even Analysis for Nautilus
+# GPU Retirement Analysis for Nautilus
 
 For each old GPU on Nautilus (NRP), better for climate to keep running it or retire + replace w/ new one? Measure real energy-per-job across GPU generations, calc break-even utilization threshold where replacement wins.
 
 ## Project Structure
 
 ```
-gpu-carbon-breakeven/
+gpu-retirement-analysis/
 ├── Dockerfile              # Benchmark container image: CUDA base + torch/transformers/pynvml, runs measurement.runner
 ├── k8s/
 │   ├── inventory.sh         # Queries cluster, lists GPU models + node counts (kubectl + jq)
