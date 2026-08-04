@@ -1,5 +1,6 @@
 # Raw cluster snapshots
-data/raw/
+data/raw/nodes_*.json
+data/raw/*.json.gz
 
 # Generated artifacts
 *.db
