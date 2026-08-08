@@ -9,4 +9,20 @@ build-and-push-job:
     GODEBUG: "http2client=0"
   script:
   - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
-  - /kaniko/executor --cache=true --push-retry=10 --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA --destination $CI_REGISTRY_IMAGE:latest
+  # Every branch gets a SHA-tagged image, which is what the benchmark pods pin
+  # to. Only the default branch also moves :latest, so a feature branch build
+  # cannot silently become the image everyone else pulls.
+  #
+  # Note CI_COMMIT_SHORT_SHA is 8 characters here, not the 7 that git rev-parse
+  # --short gives by default. Read the tag off the registry, do not derive it.
+  - |
+    DESTINATIONS="--destination $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+    if [ "$CI_COMMIT_REF_NAME" = "$CI_DEFAULT_BRANCH" ]; then
+      DESTINATIONS="$DESTINATIONS --destination $CI_REGISTRY_IMAGE:latest"
+    fi
+    echo "building for ref '$CI_COMMIT_REF_NAME' (default '$CI_DEFAULT_BRANCH')"
+    echo "destinations: $DESTINATIONS"
+    /kaniko/executor --cache=true --push-retry=10 \
+      --context "$CI_PROJECT_DIR" \
+      --dockerfile "$CI_PROJECT_DIR/Dockerfile" \
+      $DESTINATIONS

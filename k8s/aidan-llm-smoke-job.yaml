@@ -1,0 +1,105 @@
+# Single GPU arm of the llm_inference work_hash validation.
+#
+# Render with envsubst, requires: IMAGE, RUN_ID, GPU_SLUG, GPU_PRODUCT, MODEL,
+# BATCH_SIZE, MAX_NEW_TOKENS, PRECISION, WARMUP_ITERS, MEMORY
+#
+# GPU_PRODUCT is validated against data/processed/census_fleet.csv by
+# k8s/run_llm_smoke.sh before rendering, so the label string is never typed by
+# hand. The NRP docs prefer nodeAffinity, which is equivalent for a single exact
+# match; nodeSelector is used here for readability.
+#
+# Cleanup, in four layers, three of which need no client:
+#   1. activeDeadlineSeconds stops the container and frees the GPU regardless of
+#      what any client does. It moves the object to a terminal state; it does not
+#      itself delete the object.
+#   2. ttlSecondsAfterFinished has the TTL controller delete the Job and its pods
+#      server-side, including after a deadline kill or a crash. This is the layer
+#      that survives the laptop dying or the VPN dropping.
+#   3. run_llm_smoke.sh traps EXIT INT TERM HUP as the fast interactive path.
+#   4. reap_aidan.sh sweeps anything stranded.
+#
+# backoffLimit 0: a retry could land on a different card and silently produce
+# data from hardware we did not intend to measure.
+#
+# No priorityClassName: high-priority-ban and low-priority-ban in cmpm118 are
+# both pods=0 and cover default, nice, and batch-low between them. Unset matches
+# neither scope selector.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aidan-llm-smoke-${GPU_SLUG}-${RUN_ID}
+  namespace: cmpm118
+  labels:
+    app: aidan-llm-smoke
+    aidan.ucsc.edu/owner: aidan
+    aidan.ucsc.edu/run-id: "${RUN_ID}"
+    aidan.ucsc.edu/gpu-slug: "${GPU_SLUG}"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  activeDeadlineSeconds: 1200
+  template:
+    metadata:
+      labels:
+        app: aidan-llm-smoke
+        aidan.ucsc.edu/owner: aidan
+        aidan.ucsc.edu/run-id: "${RUN_ID}"
+        aidan.ucsc.edu/gpu-slug: "${GPU_SLUG}"
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        nvidia.com/gpu.product: "${GPU_PRODUCT}"
+      containers:
+      - name: benchmark
+        image: ${IMAGE}
+        # Overrides the image ENTRYPOINT, which points at measurement/runner.py.
+        # That file is still a stub owned by Arav, so calling the benchmark module
+        # directly keeps this test independent of it.
+        command:
+        - python3
+        - -m
+        - benchmarks.llm_inference
+        - --model=${MODEL}
+        - --batch-size=${BATCH_SIZE}
+        - --max-new-tokens=${MAX_NEW_TOKENS}
+        - --precision=${PRECISION}
+        - --warmup-iters=${WARMUP_ITERS}
+        - --device=cuda:0
+        - --cache-dir=/models/hf
+        - --out=/models/results/${RUN_ID}-${GPU_SLUG}.json
+        env:
+        - name: HF_HOME
+          value: /models/hf
+        - name: HF_HUB_OFFLINE
+          value: "1"
+        - name: TRANSFORMERS_OFFLINE
+          value: "1"
+        # Downward API rather than the census. CLAUDE.md requires the node and GPU
+        # be observed at runtime, and kubectl get node <name> is Forbidden for us
+        # anyway, so this is the only route to the node name from inside the pod.
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        resources:
+          requests:
+            nvidia.com/gpu: 1
+            cpu: "2"
+            memory: ${MEMORY}
+            ephemeral-storage: 10Gi
+          limits:
+            nvidia.com/gpu: 1
+            cpu: "2"
+            memory: ${MEMORY}
+            ephemeral-storage: 10Gi
+        volumeMounts:
+        - name: models
+          mountPath: /models
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: aidan-llm-models-pvc
