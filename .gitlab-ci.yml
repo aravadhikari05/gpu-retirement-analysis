@@ -22,7 +22,15 @@ build-and-push-job:
     fi
     echo "building for ref '$CI_COMMIT_REF_NAME' (default '$CI_DEFAULT_BRANCH')"
     echo "destinations: $DESTINATIONS"
-    /kaniko/executor --cache=true --push-retry=10 \
+    # cache=false: pipeline 86061 applied every layer and finished its cache
+    # push at INFO[0577], then produced no further output for 20+ minutes and
+    # had to be force-cancelled. With caching on, kaniko pushes the whole image
+    # twice, once to the cache repo and once to the tag. Halving the pushed
+    # bytes costs us fast rebuilds and buys a build that terminates.
+    #
+    # compressed-caching=false cuts kaniko's peak memory on large images, which
+    # matters here because the CUDA plus torch layers are multi-GB.
+    /kaniko/executor --cache=false --compressed-caching=false --push-retry=10 \
       --context "$CI_PROJECT_DIR" \
       --dockerfile "$CI_PROJECT_DIR/Dockerfile" \
       $DESTINATIONS
