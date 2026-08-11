@@ -83,6 +83,11 @@ if [ "$CPU_ONLY" = "false" ]; then
     | sed -e 's/^nvidia-//' -e 's/geforce-//' -e 's/[^a-z0-9]//g')"
 else
   GPU_SLUG="cpu"
+  # The CPU manifest hardcodes these. Mirror them so the banner below reports
+  # what actually runs rather than the script defaults.
+  BATCH_SIZE="1"
+  PRECISION="fp32"
+  WARMUP_ITERS="0"
 fi
 
 RUN_ID="$(date -u +%Y%m%dt%H%M%Sz)"
@@ -219,7 +224,19 @@ kubectl logs -f "$POD" -n "$NAMESPACE" 2>&1 | tee "$LOG_FILE" || true
 IMAGE_ID="$(kubectl get pod "$POD" -n "$NAMESPACE" \
   -o jsonpath='{.status.containerStatuses[0].imageID}' 2>/dev/null || true)"
 
-final_phase="$(kubectl get pod "$POD" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+# kubectl logs -f returns as soon as the container's log stream closes, which
+# happens before the pod object reaches a terminal phase. Reading the phase
+# immediately catches it still "Running" and reports a good run as a failure.
+final_phase=""
+settle_deadline=$(( $(date +%s) + 120 ))
+while :; do
+  final_phase="$(kubectl get pod "$POD" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  case "$final_phase" in
+    Succeeded|Failed) break ;;
+  esac
+  [ "$(date +%s)" -lt "$settle_deadline" ] || break
+  sleep 3
+done
 
 RESULT_FILE="${OUT_DIR}/${RUN_ID}-${GPU_SLUG}.json"
 if grep -q '^RESULT_JSON ' "$LOG_FILE"; then
