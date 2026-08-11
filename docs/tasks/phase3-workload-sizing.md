@@ -38,10 +38,19 @@ clears it, and that difference is the argument the paper needs.
 Measured this session (timed region only, warmup excluded, gpt2, fp32, batch 1,
 32 new tokens, 60 token prompt):
 
-| GPU | Runtime | Per token |
-|---|---|---|
-| NVIDIA L4 (sm 8.9) | 0.1317 s | 4.11 ms |
-| GTX 1080 Ti (sm 6.1) | 0.3200 s | 10.00 ms |
+| GPU | Model | Tokens | Runtime | Per token |
+|---|---|---|---|---|
+| NVIDIA L4 (sm 8.9) | gpt2 | 32 | 0.1317 s | 4.11 ms |
+| GTX 1080 Ti (sm 6.1) | gpt2 | 32 | 0.3200 s | 10.00 ms |
+| GTX 1080 Ti (sm 6.1) | gpt2-xl | 960 | 34.4026 s | 35.84 ms |
+
+The 1080 Ti runs 2.43x slower than the L4 on identical gpt2 work.
+
+**gpt2-xl costs 3.58x gpt2 per token, measured, not the 8 to 12x first
+estimated here.** That estimate assumed cost scales with parameter count
+(12.6x). It does not, at batch 1: decode is latency bound and scales closer to
+layer count, and gpt2-xl has 48 layers against gpt2's 12, a 4x ratio. 3.58x is
+close to that. Correcting this changes the conclusion below.
 
 Linear extrapolation from these, **estimated**:
 
@@ -67,21 +76,28 @@ tokens cannot reach 30 seconds with GPT-2 at batch 1, by a factor of about
 7.5.** This is an architectural fact, not a tuning problem. No prompt or
 generation config fixes it.
 
-That does not decide the question, because two of the three spec
-configurations change the arithmetic:
+### Measured: gpt2-xl does not rescue it either
 
-- **gpt2-xl, batch 1.** 1.558B parameters against 124M, and batch-1 decode is
-  memory-bandwidth bound, so per-token cost scales roughly with model size.
-  **Estimated** 8 to 12x the gpt2 cost, giving roughly 32 to 48 ms/token on an
-  L4 and **~31 to 46 s at the 964 token ceiling**. This configuration may clear
-  the floor natively. It needs measuring before being relied on.
-- **gpt2, batch 32.** Batch parallelism is largely absorbed by the GPU, so wall
-  time rises far less than 32x. **Estimated** 2 to 4x batch 1, giving roughly 8
-  to 16 s at the ceiling. Probably still short of the floor.
+gpt2-xl at batch 1 and 960 tokens was measured on a GTX 1080 Ti at **34.4 s**,
+which clears the floor **on that card**. That is not sufficient, because sizing
+is set by the fastest card in the sweep, not the slowest (see below).
 
-So the floor may be reachable by token count for gpt2-xl alone, and not for
-either gpt2 configuration. A sweep whose configurations are sized by different
-mechanisms is harder to reason about than one sized uniformly.
+Scaling by the measured 2.43x gap, **estimated**:
+
+| Card | gpt2-xl, 960 tokens | Clears 30 s floor? |
+|---|---|---|
+| GTX 1080 Ti | 34.4 s (**measured**) | yes |
+| NVIDIA L4 | ~14.1 s (estimated) | **no** |
+| fastest, ~1.8x L4 (estimated) | ~7.9 s (estimated) | **no** |
+
+**So no configuration reaches the 30 second floor by token count alone on
+modern hardware.** gpt2 at batch 1 falls short by roughly 7.5x, gpt2-xl by
+roughly 4x on an L4 and more on anything faster. gpt2 at batch 32 is untested
+but sits between them and will not close a 4x gap.
+
+Option A is therefore unavailable for **all three** spec configurations, not
+just the two gpt2 ones. This is settled by measurement rather than estimate on
+the old-hardware end, and by a measured ratio on the modern end.
 
 ## Two ways to reach 30 seconds
 
@@ -94,13 +110,16 @@ Push `max_new_tokens` toward the 964 ceiling.
 - Measures **long-context inference**: growing KV cache, attention over an
   increasing sequence, memory pressure rising through the run.
 - Closer to summarisation or long-form generation as a real workload.
-- **Cannot reach 30 s for gpt2 at batch 1**, per the ceiling above. Available
-  only for gpt2-xl, and possibly not even there.
-- **Makes degeneracy worse.** Already measured: `distinct_token_ratio` fell
-  0.938 at 16 tokens to 0.562 at 32. At 964 tokens greedy decoding from this
-  prompt will be almost entirely repetition, so the benchmark would largely
-  measure a KV-cache read loop. `work_hash` would still match, which is what
-  makes this failure quiet.
+- **Cannot reach 30 s on modern hardware for any of the three configurations**,
+  per the measured table above.
+- **Degeneracy is catastrophic at this length, now measured rather than
+  predicted.** `distinct_token_ratio` by generation length, gpt2 unless noted:
+  0.938 at 16 tokens, 0.562 at 32, and **0.019 at 960** (gpt2-xl). At 960
+  tokens the output is one sentence repeated to exhaustion:
+  "The average power consumption of a rack of servers is about 1 watt."
+  Under 2% of tokens are distinct, so the run is overwhelmingly a KV-cache read
+  loop rather than representative inference. `work_hash` matched perfectly and
+  the run reported success, which is exactly what makes this failure quiet.
 - Energy per token is not constant along the run, since later tokens cost more
   than earlier ones. That complicates the per-token normalisation the whole
   analysis rests on.
