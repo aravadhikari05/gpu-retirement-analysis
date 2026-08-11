@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import os
+import subprocess
 import time
 
 # Offline enforcement must be in place before huggingface_hub is imported, so it
@@ -108,12 +109,28 @@ def _set_precision(precision: str, device: str) -> dict:
 
     dtype, tf32_requested = _PRECISION_SPEC[precision]
 
-    torch.backends.cuda.matmul.allow_tf32 = tf32_requested
-    torch.backends.cudnn.allow_tf32 = tf32_requested
+    matmul = torch.backends.cuda.matmul
+
+    # The legacy API. Present through torch 2.x, deprecated from 2.9 onward.
+    if hasattr(matmul, "allow_tf32"):
+        matmul.allow_tf32 = tf32_requested
+    if hasattr(torch.backends.cudnn, "allow_tf32"):
+        torch.backends.cudnn.allow_tf32 = tf32_requested
+
+    # The replacement API. torch 2.9 moved TF32 control to fp32_precision and
+    # made allow_tf32 a deprecated shim. Set both where both exist, so the
+    # setting is unambiguous no matter which one the installed torch honours.
+    # Getting this wrong is not a warning, it silently routes fp32 matmuls
+    # through tensor cores on Ampere and later while a 1080 Ti cannot follow.
+    fp32_mode = "tf32" if tf32_requested else "ieee"
+    if hasattr(matmul, "fp32_precision"):
+        matmul.fp32_precision = fp32_mode
+    conv = getattr(torch.backends.cudnn, "conv", None)
+    if conv is not None and hasattr(conv, "fp32_precision"):
+        conv.fp32_precision = fp32_mode
 
     # Reduced precision reduction defaults differ in effect across architectures,
     # so pin them rather than inherit them.
-    matmul = torch.backends.cuda.matmul
     if hasattr(matmul, "allow_fp16_reduced_precision_reduction"):
         matmul.allow_fp16_reduced_precision_reduction = False
     if hasattr(matmul, "allow_bf16_reduced_precision_reduction"):
@@ -131,8 +148,12 @@ def _set_precision(precision: str, device: str) -> dict:
         "precision_mode": precision,
         "resolved_dtype": str(dtype),
         "tf32_requested": tf32_requested,
-        "allow_tf32_matmul": bool(torch.backends.cuda.matmul.allow_tf32),
-        "allow_tf32_cudnn": bool(torch.backends.cudnn.allow_tf32),
+        # Read back, never echoed from the request. On a 1080 Ti these are a
+        # silent no-op, which is why sm_capability is recorded alongside.
+        "allow_tf32_matmul": bool(getattr(matmul, "allow_tf32", False)),
+        "allow_tf32_cudnn": bool(getattr(torch.backends.cudnn, "allow_tf32", False)),
+        "matmul_fp32_precision": str(getattr(matmul, "fp32_precision", "")),
+        "cudnn_conv_fp32_precision": str(getattr(conv, "fp32_precision", "")) if conv else "",
         "tf32_effective": tf32_effective,
         "sm_capability": capability,
         "allow_fp16_reduced_precision_reduction": bool(
@@ -153,7 +174,22 @@ def _load(model_key: str, dtype: torch.dtype, device: str, cache_dir: str):
     """
     model_id, revision = MODELS[model_key]
 
-    logger.info("Loading %s at revision %s from %s", model_id, revision, cache_dir)
+    # transformers 5.x renamed from_pretrained's torch_dtype argument to dtype.
+    # from_pretrained takes **kwargs, so passing the wrong name is not an error;
+    # it is silently ignored and the model loads in its checkpoint dtype. That
+    # would quietly invalidate every fp16 and bf16 comparison, so the choice is
+    # made by version and then verified by assertion below.
+    major = int(str(transformers.__version__).split(".")[0])
+    dtype_kwarg = "dtype" if major >= 5 else "torch_dtype"
+
+    logger.info(
+        "Loading %s at revision %s from %s (transformers %s, using %s=)",
+        model_id,
+        revision,
+        cache_dir,
+        transformers.__version__,
+        dtype_kwarg,
+    )
     tokenizer = AutoTokenizer.from_pretrained(
         model_id, revision=revision, cache_dir=cache_dir, local_files_only=True
     )
@@ -162,8 +198,17 @@ def _load(model_key: str, dtype: torch.dtype, device: str, cache_dir: str):
         revision=revision,
         cache_dir=cache_dir,
         local_files_only=True,
-        torch_dtype=dtype,
+        **{dtype_kwarg: dtype},
     )
+
+    if model.dtype != dtype:
+        raise RuntimeError(
+            f"requested dtype {dtype} but model loaded as {model.dtype}. The "
+            f"'{dtype_kwarg}' argument was ignored by transformers "
+            f"{transformers.__version__}. Refusing to record a run whose "
+            "precision is not what was asked for."
+        )
+
     model.to(torch.device(device))
     model.eval()
     return tokenizer, model, model_id, revision
@@ -199,6 +244,21 @@ def _work_hash(new_tokens: torch.Tensor) -> str:
     return digest.hexdigest()
 
 
+def _longest_repeated_run(tokens: list) -> int:
+    """Length of the longest run of one repeated token id.
+
+    A blunt degeneracy check. Greedy decoding that has collapsed into a loop
+    shows up here immediately.
+    """
+    if not tokens:
+        return 0
+    best = run = 1
+    for previous, current in zip(tokens, tokens[1:]):
+        run = run + 1 if current == previous else 1
+        best = max(best, run)
+    return best
+
+
 def _observed_hardware(device: str) -> dict:
     """Hardware as observed at runtime from inside the pod.
 
@@ -213,6 +273,7 @@ def _observed_hardware(device: str) -> dict:
         "gpu_model_torch": "",
         "gpu_uuid": "",
         "driver_version": "",
+        "hardware_source": "",
         "nvml_error": "",
     }
 
@@ -222,6 +283,10 @@ def _observed_hardware(device: str) -> dict:
     index = _device_index(device)
     observed["gpu_model_torch"] = torch.cuda.get_device_name(index)
 
+    # pynvml and nvidia-ml-py both install a module named pynvml, so when both
+    # are present in the image whichever landed last wins and the two disagree
+    # on some symbols. Driver version is required metadata, so a failure here
+    # falls through to nvidia-smi rather than leaving the field blank.
     try:
         import pynvml
 
@@ -231,13 +296,50 @@ def _observed_hardware(device: str) -> dict:
             observed["gpu_model_observed"] = _decode(pynvml.nvmlDeviceGetName(handle))
             observed["gpu_uuid"] = _decode(pynvml.nvmlDeviceGetUUID(handle))
             observed["driver_version"] = _decode(pynvml.nvmlSystemGetDriverVersion())
+            observed["hardware_source"] = "pynvml"
         finally:
             pynvml.nvmlShutdown()
-    except Exception as exc:  # NVML absent or restricted; record, do not fail
+    except Exception as exc:
         observed["nvml_error"] = f"{type(exc).__name__}: {exc}"
-        logger.warning("NVML unavailable, hardware fields partly empty: %s", exc)
+        logger.warning("NVML unavailable (%s), falling back to nvidia-smi", exc)
+        observed.update(_nvidia_smi_hardware(index))
 
     return observed
+
+
+def _nvidia_smi_hardware(index: int) -> dict:
+    """Reads GPU name, driver version and UUID from nvidia-smi.
+
+    Fallback for when the pynvml and nvidia-ml-py packages collide. nvidia-smi
+    ships in the CUDA runtime image and is present in any GPU pod.
+    """
+    fields = {}
+    try:
+        completed = subprocess.run(
+            [
+                "nvidia-smi",
+                f"--id={index}",
+                "--query-gpu=name,driver_version,uuid",
+                "--format=csv,noheader",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+        parts = [p.strip() for p in completed.stdout.strip().split(",")]
+        if len(parts) >= 3:
+            fields["gpu_model_observed"] = parts[0]
+            fields["driver_version"] = parts[1]
+            fields["gpu_uuid"] = parts[2]
+            fields["hardware_source"] = "nvidia-smi"
+            logger.info("nvidia-smi reports %s driver %s", parts[0], parts[1])
+        else:
+            fields["nvml_error"] = f"unparsed nvidia-smi output: {completed.stdout!r}"
+    except Exception as exc:
+        fields["nvml_error"] = f"pynvml and nvidia-smi both failed: {exc}"
+        logger.error("nvidia-smi fallback also failed: %s", exc)
+    return fields
 
 
 def _sync(device: str) -> None:
@@ -342,6 +444,14 @@ def run(
     rows = new_tokens.tolist()
     all_rows_identical = all(row == rows[0] for row in rows)
 
+    # Decoded text is recorded, not just the digest. Greedy decoding from a
+    # short prompt degenerates into repetition, and 32 tokens of one phrase on
+    # a loop would pass the hash check while being a poor basis for the sweep.
+    # distinct_token_ratio is the cheap numeric version of that judgement.
+    generated_text = tokenizer.decode(rows[0], skip_special_tokens=True)
+    distinct_token_ratio = len(set(rows[0])) / len(rows[0]) if rows[0] else 0.0
+    longest_repeat = _longest_repeated_run(rows[0])
+
     prompt_hash = hashlib.sha256(PROMPT.encode("utf-8")).hexdigest()
     config_id = (
         f"{model_key}|{revision[:12]}|{precision}|b{batch_size}"
@@ -371,6 +481,11 @@ def run(
         "deterministic_algorithms": bool(deterministic),
         "work_hash_encoding": WORK_HASH_ENCODING,
         "all_rows_identical": all_rows_identical,
+        # Degeneracy signals. A hash can match perfectly on output that is
+        # worthless as a benchmark workload, so these travel with every record.
+        "generated_text": generated_text,
+        "distinct_token_ratio": distinct_token_ratio,
+        "longest_repeated_run": longest_repeat,
         # Software versions
         "torch_version": torch.__version__,
         "transformers_version": transformers.__version__,
@@ -458,10 +573,17 @@ if __name__ == "__main__":
     print("RESULT_JSON " + json.dumps(stdout_record, sort_keys=True))
 
     logger.info(
-        "work_hash=%s runtime_seconds=%.4f gpu=%s driver=%s node=%s",
+        "work_hash=%s runtime_seconds=%.4f gpu=%s driver=%s (via %s) node=%s",
         result["work_hash"],
         result["runtime_seconds"],
         result["gpu_model_observed"] or result["gpu_model_torch"],
         result["driver_version"],
+        result["hardware_source"] or "none",
         result["node_name"],
     )
+    logger.info(
+        "degeneracy: distinct_token_ratio=%.3f longest_repeated_run=%d",
+        result["distinct_token_ratio"],
+        result["longest_repeated_run"],
+    )
+    logger.info("generated text: %r", result["generated_text"])
