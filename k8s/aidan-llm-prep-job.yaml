@@ -1,0 +1,114 @@
+# One-shot download of the pinned gpt2 and gpt2-xl revisions onto
+# aidan-llm-models-pvc. Run once; benchmark pods then load offline.
+#
+# Render with envsubst, requires: IMAGE, RUN_ID
+#
+# A Job rather than a Pod so ttlSecondsAfterFinished has the cluster delete it
+# server-side, with no dependence on the submitting client staying alive.
+#
+# No GPU requested. Downloading weights needs none, and cmpm118 is shared.
+#
+# No priorityClassName: the high-priority-ban and low-priority-ban quotas in
+# cmpm118 are both pods=0 and between them cover default, nice, and batch-low.
+# An unset priority class matches neither scope selector and is admitted.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aidan-llm-prep-${RUN_ID}
+  namespace: cmpm118
+  labels:
+    app: aidan-llm-prep
+    aidan.ucsc.edu/owner: aidan
+    aidan.ucsc.edu/run-id: "${RUN_ID}"
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: aidan-llm-prep
+        aidan.ucsc.edu/owner: aidan
+        aidan.ucsc.edu/run-id: "${RUN_ID}"
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: prep
+        image: ${IMAGE}
+        env:
+        - name: HF_HOME
+          value: /models/hf
+        command:
+        - python3
+        - -c
+        - |
+          import hashlib, json, os
+          from huggingface_hub import snapshot_download
+
+          # Must match benchmarks/llm_inference.py MODELS exactly.
+          MODELS = {
+              "gpt2": ("openai-community/gpt2",
+                       "607a30d783dfa663caf39e06633721c8d4cfcd7e"),
+              "gpt2-xl": ("openai-community/gpt2-xl",
+                          "15ea56dee5df4983c59b2538573817e1667135e2"),
+          }
+
+          # Without allow_patterns the download also pulls pytorch_model.bin,
+          # tf_model.h5, flax_model.msgpack, rust_model.ot, three .tflite files
+          # and the whole onnx/ directory, several times the useful size.
+          ALLOW = [
+              "config.json", "generation_config.json", "tokenizer.json",
+              "tokenizer_config.json", "vocab.json", "merges.txt",
+              "model.safetensors",
+          ]
+
+          cache = "/models/hf"
+          os.makedirs(cache, exist_ok=True)
+          manifest = {"cache_dir": cache, "models": {}}
+
+          for key, (model_id, revision) in MODELS.items():
+              print(f"downloading {model_id} @ {revision}", flush=True)
+              path = snapshot_download(
+                  repo_id=model_id, revision=revision,
+                  cache_dir=cache, allow_patterns=ALLOW,
+              )
+              files = {}
+              for name in sorted(os.listdir(path)):
+                  full = os.path.join(path, name)
+                  if not os.path.isfile(full):
+                      continue
+                  digest = hashlib.sha256()
+                  with open(full, "rb") as fh:
+                      for chunk in iter(lambda: fh.read(1 << 20), b""):
+                          digest.update(chunk)
+                  files[name] = {
+                      "size_bytes": os.path.getsize(full),
+                      "sha256": digest.hexdigest(),
+                  }
+                  print(f"  {name} {files[name]['size_bytes']} "
+                        f"{files[name]['sha256'][:16]}", flush=True)
+              manifest["models"][key] = {
+                  "model_id": model_id, "revision": revision,
+                  "snapshot_path": path, "files": files,
+              }
+
+          out = os.path.join(cache, "MANIFEST.json")
+          with open(out, "w") as fh:
+              json.dump(manifest, fh, indent=2, sort_keys=True)
+          print("wrote " + out, flush=True)
+        resources:
+          requests:
+            cpu: "2"
+            memory: 4Gi
+            ephemeral-storage: 4Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
+            ephemeral-storage: 4Gi
+        volumeMounts:
+        - name: models
+          mountPath: /models
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: aidan-llm-models-pvc

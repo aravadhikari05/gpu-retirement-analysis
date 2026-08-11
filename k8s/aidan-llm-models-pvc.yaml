@@ -1,0 +1,26 @@
+# Pre-staged Hugging Face weights for benchmarks/llm_inference.py.
+#
+# Weights live here rather than baked into the container image. Baking gpt2-xl
+# would add about 6.4 GB to an image that Arav and Veda also pull for workloads
+# that never load it, and kaniko would have to push that layer on every code
+# change. Loading from cephfs happens before the timed region, so "no network
+# access during measurement" holds either way.
+#
+# ReadWriteMany so the one-shot prep job and the benchmark pods can mount it
+# concurrently from different nodes. 20Gi covers roughly 7 GB of weights
+# (gpt2 548 MB + gpt2-xl 6.43 GB) with headroom for result records.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aidan-llm-models-pvc
+  namespace: cmpm118
+  labels:
+    app: aidan-llm
+    aidan.ucsc.edu/owner: aidan
+spec:
+  storageClassName: rook-cephfs
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi

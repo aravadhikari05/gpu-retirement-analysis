@@ -1,0 +1,82 @@
+# CPU-only smoke test for benchmarks/llm_inference.py.
+#
+# Render with envsubst, requires: IMAGE, RUN_ID, MODEL, MAX_NEW_TOKENS
+#
+# docs/tasks/phase3-llm-inference.md asks for a CPU smoke test before any GPU
+# run. This runs it in the same image that the GPU arms use, which a laptop
+# virtualenv would not, and needs no local torch install.
+#
+# Not a pass criterion: CPU work_hash matching CUDA work_hash. Different
+# backends entirely, and expecting agreement there would be unfounded. This run
+# proves the code executes and emits a well formed record.
+#
+# No GPU requested and no nodeSelector, so this never occupies a shared card.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aidan-llm-cpusmoke-${RUN_ID}
+  namespace: cmpm118
+  labels:
+    app: aidan-llm-smoke
+    aidan.ucsc.edu/owner: aidan
+    aidan.ucsc.edu/run-id: "${RUN_ID}"
+    aidan.ucsc.edu/gpu-slug: cpu
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  activeDeadlineSeconds: 1200
+  template:
+    metadata:
+      labels:
+        app: aidan-llm-smoke
+        aidan.ucsc.edu/owner: aidan
+        aidan.ucsc.edu/run-id: "${RUN_ID}"
+        aidan.ucsc.edu/gpu-slug: cpu
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: benchmark
+        image: ${IMAGE}
+        command:
+        - python3
+        - -m
+        - benchmarks.llm_inference
+        - --model=${MODEL}
+        - --batch-size=1
+        - --max-new-tokens=${MAX_NEW_TOKENS}
+        - --precision=fp32
+        - --warmup-iters=0
+        - --device=cpu
+        - --cache-dir=/models/hf
+        - --out=/models/results/${RUN_ID}-cpu.json
+        env:
+        - name: HF_HOME
+          value: /models/hf
+        - name: HF_HUB_OFFLINE
+          value: "1"
+        - name: TRANSFORMERS_OFFLINE
+          value: "1"
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        resources:
+          requests:
+            cpu: "2"
+            memory: 8Gi
+            ephemeral-storage: 4Gi
+          limits:
+            cpu: "2"
+            memory: 8Gi
+            ephemeral-storage: 4Gi
+        volumeMounts:
+        - name: models
+          mountPath: /models
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: aidan-llm-models-pvc

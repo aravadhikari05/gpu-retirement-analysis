@@ -1,4 +1,25 @@
+# Kaniko builds from the whole repo, so anything not excluded here is read as
+# build context, and anything under a COPY path lands in an image layer.
+
 .git
+.github/
+.gitlab-ci.yml
+
+# Local agent and editor config, no reason to ship it.
+.claude/
+
+# Python bytecode. The Dockerfile does COPY benchmarks/ and COPY measurement/,
+# so without this, .pyc files compiled by whichever interpreter ran locally get
+# baked into an image whose python3 is a different version.
+__pycache__/
+*.pyc
+*.pyo
+
+# Telemetry and results. The census CSVs under data/processed/ would otherwise
+# be readable in an image that any node on the cluster can pull.
 data/
 results/
+
+# Prose and analysis output, never needed at build time.
 docs/
+paper/
