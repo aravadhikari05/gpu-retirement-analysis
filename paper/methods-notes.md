@@ -16,11 +16,25 @@ revisions on both cards.
 |---|---|---|---|
 | GTX 1080 Ti (sm 6.1) | 10.00 ms/token | 35.84 ms/token | 3.58x |
 | NVIDIA L4 (sm 8.9) | 4.11 ms/token | 34.24 ms/token | 8.33x |
+| NVIDIA L40S (sm 8.9) | not measured | 16.09 ms/token | |
 | **1080 Ti / L4** | **2.43x slower** | **1.05x slower** | |
 
 **The headline: on gpt2-xl at batch 1 the seven-year-old 1080 Ti is within 5% of
 the L4** (34.40 s against 32.87 s for identical work), despite being 2.43x
 slower on gpt2.
+
+Runtime tracks memory bandwidth, not architecture generation or age. The L4 and
+L40S share an architecture (both sm 8.9, both Ada) and differ by 2.13x in
+runtime, while the L4 and the 1080 Ti are three architectures apart and differ
+by 1.05x:
+
+| GPU | Published peak BW | gpt2-xl 960 tok | Effective BW | Utilisation |
+|---|---|---|---|---|
+| NVIDIA L4 | 300 GB/s | 32.87 s | 187.8 GB/s | 63% |
+| GTX 1080 Ti | 484 GB/s | 34.40 s | 179.4 GB/s | 37% |
+| NVIDIA L40S | 864 GB/s | 15.45 s | 399.6 GB/s | 46% |
+
+Bandwidth ordering predicts runtime ordering; sm version does not.
 
 **Why.** The two models are in different regimes. gpt2 is 0.5 GB and largely
 compute and launch-overhead bound, where the L4's newer architecture wins. At
@@ -86,9 +100,23 @@ point addition is not associative, so a near-tied pair of candidate tokens can
 flip on one architecture and diverge every token after it. The result is
 empirical and length dependent.
 
+### Extended to three cards and three drivers at 960 tokens
+
+**Measured 2026-08-11.** gpt2-xl at revision `15ea56dee5df`, fp32, batch 1, 960
+new tokens (1020 of the 1024 context ceiling), TF32 explicitly disabled.
+
+| GPU | sm | Driver | Runtime | work_hash |
+|---|---|---|---|---|
+| GTX 1080 Ti | 6.1 | 580.159.04 | 34.40 s | `da913d94…` |
+| NVIDIA L4 | 8.9 | 595.71.05 | 32.87 s | `da913d94…` |
+| NVIDIA L40S | 8.9 | 610.43.02 | 15.45 s | `da913d94…` |
+
+One distinct hash across **three cards, two architectures and three driver
+versions**, at 30x the argmax decisions of the 32 token test. Runtimes span
+2.23x on bit-identical output.
+
 **Not established.** Agreement between two different cards of the same model:
-both L4 runs used the same physical GPU (`gpu_uuid GPU-e82f7d3b`). Agreement at
-longer generation lengths is being tested separately.
+both L4 runs used the same physical GPU (`gpu_uuid GPU-e82f7d3b`).
 
 ---
 

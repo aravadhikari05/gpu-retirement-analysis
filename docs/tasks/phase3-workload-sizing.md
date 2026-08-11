@@ -82,42 +82,29 @@ gpt2-xl at batch 1 and 960 tokens was measured on a GTX 1080 Ti at **34.4 s**,
 which clears the floor **on that card**. That is not sufficient, because sizing
 is set by the fastest card in the sweep, not the slowest (see below).
 
-Both ends are now **measured**, and the L4 figure falsified the estimate that
-was here before:
+All three cards are now **measured**, at identical work:
 
-| Card | gpt2-xl, 960 tokens | Clears 30 s floor? |
-|---|---|---|
-| GTX 1080 Ti | **34.40 s** measured | yes |
-| NVIDIA L4 | **32.87 s** measured | **yes** |
-| fastest, L40S / 4090 class | ~10 to 15 s (estimated) | probably not |
+| Card | Peak BW | gpt2-xl, 960 tokens | Clears 30 s floor? |
+|---|---|---|---|
+| GTX 1080 Ti (sm 6.1) | 484 GB/s | **34.40 s** | yes |
+| NVIDIA L4 (sm 8.9) | 300 GB/s | **32.87 s** | yes |
+| **NVIDIA L40S (sm 8.9)** | **864 GB/s** | **15.45 s** | **no** |
 
-This section previously predicted the L4 at ~14.1 s by scaling the 2.43x gap
-measured on gpt2. **That was wrong by 2.3x.** The scaling is invalid because the
-two models sit in different regimes: gpt2 is 0.5 GB and compute bound, while
-gpt2-xl at batch 1 streams 6.43 GB of weights per token and is bandwidth bound,
-where the 1080 Ti's 484 GB/s published peak beats the L4's 300 GB/s. See
-`paper/methods-notes.md`.
+**Settled: Option A is closed.** Sizing is set by the fastest card, and the
+L40S comes in at half the floor. The RTX 4090 has more bandwidth still (1008
+GB/s published) so it lands lower again, and does not need testing to decide
+this. **Repetition inside the timed region is required.**
 
-**Revised conclusion. gpt2-xl at batch 1 and 960 tokens clears the floor on both
-cards tested.** Option A is viable for that configuration, at least across this
-part of the fleet. It remains closed for gpt2 at batch 1, which falls short by
-roughly 7.5x and cannot be extended past the 1024 context ceiling.
+Note this section previously predicted the L4 at ~14.1 s by scaling the 2.43x
+gap measured on gpt2. That was wrong by 2.3x, because gpt2 is compute bound at
+0.5 GB while gpt2-xl at batch 1 streams 6.43 GB per token and is bandwidth
+bound. The corrected reasoning is in `paper/methods-notes.md`. The L40S estimate
+of 12 to 20 s, made from bandwidth rather than by scaling a different model's
+ratio, was right.
 
-Two things still argue against relying on it:
-
-- **The fastest cards in the sweep are untested and likely fall short.** An L40S
-  or 4090 has roughly 3x the L4's memory bandwidth, so the same run could land
-  near 10 to 15 s. Since sizing is set by the fastest card, one card below the
-  floor forces repetition anyway. **This is now the decisive open question and
-  is one short run to answer.**
-- **Degeneracy is catastrophic at this length regardless.** 0.019
-  distinct-token ratio, measured. Even where Option A clears the floor, it
-  measures a KV-cache read loop.
-
-So the practical position is unchanged even though the arithmetic changed:
-repetition is still the design that works uniformly, and it is still the one
-that avoids the degeneracy artifact. But the reason is now "the fastest cards
-and the gpt2 configurations fall short", not "nothing reaches the floor".
+Degeneracy argues the same way independently: `distinct_token_ratio` is 0.019 at
+960 tokens on every card measured, so even where Option A did clear the floor it
+was measuring a KV-cache read loop rather than inference.
 
 ## Two ways to reach 30 seconds
 
