@@ -95,11 +95,18 @@ Not yet established: agreement between two different cards of the same model
 (both L4 runs used one physical GPU), and agreement at the full 500-token
 length, where a single flipped argmax poisons everything after it.
 
-Decode cost at batch 1 scales with **layer count, not parameter count**. gpt2-xl
-costs 3.58x gpt2 per token (measured, 1080 Ti), against a 12.6x parameter ratio
-and a 4.0x layer ratio. Batch-1 decode is latency bound: layers are serial,
-width is absorbed in parallel. Any energy model assuming cost tracks parameter
-count overstates large models at batch 1 by roughly 3x.
+**Batch-1 decode of a large model is memory-bandwidth bound, and on gpt2-xl the
+1080 Ti is within 5% of an L4** (34.40 s against 32.87 s for identical work),
+despite being 2.43x slower on gpt2. At batch 1 gpt2-xl streams all 6.43 GB of
+weights per token, and the 1080 Ti's 484 GB/s published bandwidth beats the L4's
+300 GB/s. If the replacement case for this workload holds, it rests on power
+draw (250 W against 72 W published TDP), not on speed. That is a hypothesis
+until Phase 4 measures it.
+
+Corollary: do not scale one GPU's model-to-model cost ratio onto another card.
+Doing exactly that predicted the L4 at 14 s against an actual 32.87 s, because
+gpt2 and gpt2-xl sit in different regimes (compute bound against bandwidth
+bound).
 
 Greedy decoding degenerates with length. `distinct_token_ratio` is 0.938 at 16
 tokens, 0.562 at 32, and 0.019 at 960. A run can pass `work_hash`, report

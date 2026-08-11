@@ -7,38 +7,61 @@ what the hardware actually did.
 
 ---
 
-## Decode cost at batch 1 scales with layer count, not parameter count
+## Batch-1 decode of a large model is memory-bandwidth bound, and the 1080 Ti is competitive
 
-**Measured 2026-08-11, GTX 1080 Ti (sm 6.1, driver 580.159.04), fp32, batch 1,
-greedy, 60 token prompt.**
+**Measured 2026-08-11**, fp32, batch 1, greedy, 60 token prompt, same pinned
+revisions on both cards.
 
-| Model | Parameters | Layers | Tokens | Runtime | Per token |
-|---|---|---|---|---|---|
-| gpt2 | 124M | 12 | 32 | 0.3200 s | 10.00 ms |
-| gpt2-xl | 1.558B | 48 | 960 | 34.4026 s | 35.84 ms |
+| GPU | gpt2, 32 tok | gpt2-xl, 960 tok | gpt2-xl / gpt2 |
+|---|---|---|---|
+| GTX 1080 Ti (sm 6.1) | 10.00 ms/token | 35.84 ms/token | 3.58x |
+| NVIDIA L4 (sm 8.9) | 4.11 ms/token | 34.24 ms/token | 8.33x |
+| **1080 Ti / L4** | **2.43x slower** | **1.05x slower** | |
 
-**gpt2-xl costs 3.58x gpt2 per token.** The parameter ratio is 12.6x; the layer
-ratio is 4.0x. The measured cost tracks the layer ratio.
+**The headline: on gpt2-xl at batch 1 the seven-year-old 1080 Ti is within 5% of
+the L4** (34.40 s against 32.87 s for identical work), despite being 2.43x
+slower on gpt2.
 
-**Why.** At batch 1 autoregressive decode is latency bound rather than
-throughput bound. Each token requires a sequential pass through every layer, and
-each layer's cost is dominated by kernel launch overhead and weight streaming
-from memory rather than by arithmetic. Widening a layer (768 to 1600 hidden)
-adds work that the GPU absorbs largely in parallel; adding layers (12 to 48)
-adds serial steps that it cannot.
+**Why.** The two models are in different regimes. gpt2 is 0.5 GB and largely
+compute and launch-overhead bound, where the L4's newer architecture wins. At
+batch 1, gpt2-xl must stream all 6.43 GB of weights from memory for **every
+token**, making it memory-bandwidth bound. Published peak bandwidth is **484
+GB/s** for the 1080 Ti (GDDR5X, 352-bit) against **300 GB/s** for the L4 (GDDR6,
+192-bit). The older card has more bandwidth, which offsets its weaker compute.
 
-**Why it matters for this paper.** Any energy-per-token model that assumes cost
-scales with parameter count will overstate the cost of large models at batch 1
-by roughly 3x. It also means model depth, not size, is the lever that determines
-how long a batch-1 benchmark runs, which is what makes reaching a 30 second
-measurement floor difficult (see `docs/tasks/phase3-workload-sizing.md`).
+Effective weight-streaming bandwidth implied by the measurements:
 
-**Caveats.** Two points, not a curve, and the two runs differ in generation
-length (32 against 960 tokens), so the gpt2 figure carries proportionally more
-fixed startup cost and the true ratio is probably somewhat above 3.58x. Both
-runs are batch 1; the relationship should not be assumed to hold at batch 32,
-where the GPU has parallel work to absorb. This should be re-measured at matched
-token counts before being quoted as a headline number.
+| GPU | Effective | Published peak | Utilisation |
+|---|---|---|---|
+| GTX 1080 Ti | 179.4 GB/s | 484 GB/s | 37% |
+| NVIDIA L4 | 187.8 GB/s | 300 GB/s | 63% |
+
+Both land near 180 to 190 GB/s. The L4 runs closer to its ceiling; the 1080 Ti
+has headroom it cannot exploit, consistent with per-layer launch overhead
+limiting an older architecture with 48 serial layers.
+
+**Why it matters for this paper.** This is close to the central question. If a
+modern inference card is no faster than a 2017 consumer card on large-model
+batch-1 decode, then any replacement case for this workload rests entirely on
+**power draw**, not throughput. Published TDP is 250 W for the 1080 Ti against
+72 W for the L4, so the energy-per-token gap could be large even though the
+time-per-token gap is negligible. **That is a hypothesis until Phase 4 measures
+it, not a result.**
+
+**Caveats.** Bandwidth figures are published specifications, not measured. The
+per-model ratios come from two points at mismatched generation lengths (32
+against 960 tokens), so the gpt2 figures carry proportionally more fixed startup
+cost and the true ratios are somewhat compressed. Batch 1 only; at batch 32 the
+weight read is amortised across the batch and the regime should shift back
+toward compute bound, which would favour the L4 again. Re-measure at matched
+token counts and at batch 32 before quoting any of this as headline numbers.
+
+**Superseded.** An earlier version of this note claimed gpt2-xl costs "3.58x
+gpt2 per token" as a general fact explained by layer count. That was measured
+only on the 1080 Ti; the L4 gives 8.33x. The layer-count story is not wrong so
+much as incomplete, and it is not the dominant effect. Scaling one GPU's ratio
+to another card, which is how the L4 was predicted at ~14 s against an actual
+32.87 s, is invalid across regime boundaries.
 
 ---
 
