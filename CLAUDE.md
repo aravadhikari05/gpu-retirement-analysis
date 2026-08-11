@@ -99,7 +99,7 @@ length, where a single flipped argmax poisons everything after it.
 bandwidth, not architecture generation.** On gpt2-xl the 1080 Ti is within 5% of
 an L4 (34.40 s against 32.87 s), while the L4 and L40S share an architecture and
 differ by 2.13x (32.87 s against 15.45 s). Bandwidth ordering predicts runtime
-ordering; sm version does not. At batch 1 gpt2-xl streams all 6.43 GB of
+ordering; sm version does not. Peak bandwidth figures are verified for L4 (300 GB/s) and L40S (864 GB/s) from NVIDIA product pages; the 1080 Ti's 484 GB/s and the 4090's 1008 GB/s are derived, not published, and need a citable primary source before use in the paper. At batch 1 gpt2-xl streams all 6.43 GB of
 weights per token, and the 1080 Ti's 484 GB/s published bandwidth beats the L4's
 300 GB/s. If the replacement case for this workload holds, it rests on power
 draw (250 W against 72 W published TDP), not on speed. That is a hypothesis

@@ -28,13 +28,58 @@ L40S share an architecture (both sm 8.9, both Ada) and differ by 2.13x in
 runtime, while the L4 and the 1080 Ti are three architectures apart and differ
 by 1.05x:
 
-| GPU | Published peak BW | gpt2-xl 960 tok | Effective BW | Utilisation |
-|---|---|---|---|---|
-| NVIDIA L4 | 300 GB/s | 32.87 s | 187.8 GB/s | 63% |
-| GTX 1080 Ti | 484 GB/s | 34.40 s | 179.4 GB/s | 37% |
-| NVIDIA L40S | 864 GB/s | 15.45 s | 399.6 GB/s | 46% |
+| GPU | Peak BW | Source | gpt2-xl 960 tok | Effective BW | Utilisation |
+|---|---|---|---|---|---|
+| NVIDIA L4 | 300 GB/s | **verified** | 32.87 s | 187.8 GB/s | 63% |
+| GTX 1080 Ti | 484 GB/s | **derived** | 34.40 s | 179.4 GB/s | 37% |
+| NVIDIA L40S | 864 GB/s | **verified** | 15.45 s | 399.6 GB/s | 46% |
 
 Bandwidth ordering predicts runtime ordering; sm version does not.
+
+### Provenance of the bandwidth figures, checked 2026-08-11
+
+These are the denominators for every utilisation number above, so they are
+sourced individually rather than recalled. **Two of four could not be verified
+against a live NVIDIA source.**
+
+| GPU | Figure | Status | Source and exact spec label |
+|---|---|---|---|
+| NVIDIA L4 | 300 GB/s | **verified** | <https://www.nvidia.com/en-us/data-center/l4/>, spec label "GPU memory bandwidth", value "300GB/s" |
+| NVIDIA L40S | 864 GB/s | **verified** | <https://www.nvidia.com/en-us/data-center/l40s/>, spec label "Memory Bandwidth", value "864GB/s" |
+| GTX 1080 Ti | 484 GB/s | **derived, not verified** | NVIDIA's product and specs pages for this card are retired; `en-us` 404s and `en-gb` and the 10-series specs page now serve current-generation content. Figure is 352-bit bus x 11 Gbps / 8 = 484 GB/s. NVIDIA's launch material confirms "11Gbps" memory speed but states no GB/s figure. **The 352-bit bus width is also unverified.** |
+| RTX 4090 | 1008 GB/s | **derived, not verified** | <https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4090/> publishes "Memory Interface Width: 384-bit" and "Standard Memory Config: 24 GB GDDR6X" but **publishes no memory bandwidth spec at all**. Figure is 384-bit x 21 Gbps / 8 = 1008 GB/s, where the 384-bit width is official and the 21 Gbps data rate is not. |
+
+Both verified figures are **theoretical peak**, which is what NVIDIA labels them
+as. No effective-bandwidth figures were used.
+
+The 1080 Ti number is the one carrying the "2017 consumer card beats a 2023
+datacenter card on paper bandwidth" claim, and it is the weaker of the two
+derivations. **Before this appears in the paper it needs a citable primary
+source**, for example the Pascal GP102 architecture whitepaper or an archived
+copy of NVIDIA's original specifications page.
+
+What does not depend on these figures: the measured runtimes, and the ordering
+result. 1080 Ti and L4 differ by 1.05x while L4 and L40S differ by 2.13x, and
+that stands on the runtimes alone. What does depend on them: every utilisation
+percentage, and the specific claim that the 1080 Ti has more peak bandwidth than
+the L4.
+
+### Caveat from NVIDIA on comparing peak bandwidth across architectures
+
+NVIDIA states that peak bandwidth understates Ada's memory performance, because
+its much larger L2 cache "reduced memory bus traffic by just over 50% on
+average", letting the GPU use bandwidth "2X more efficiently". Their worked
+example: "an Ada GPU with 288 GB/sec of peak memory bandwidth would perform
+similarly to an Ampere GPU with 554 GB/sec of peak memory bandwidth"
+(<https://www.nvidia.com/en-us/geforce/news/rtx-40-series-vram-video-memory-explained/>).
+
+This cuts against using peak bandwidth as a cross-architecture predictor in
+general. It bears less on this workload specifically: gpt2-xl's 6.43 GB of
+weights exceeds any of these cards' L2 by two orders of magnitude and is
+streamed once per token with no reuse, so cache cannot absorb it. That reasoning
+should be stated rather than assumed, and the cleanest way to settle it is to
+measure achieved bandwidth directly with a STREAM-style benchmark instead of
+inferring it from datasheet peaks.
 
 **Why.** The two models are in different regimes. gpt2 is 0.5 GB and largely
 compute and launch-overhead bound, where the L4's newer architecture wins. At
