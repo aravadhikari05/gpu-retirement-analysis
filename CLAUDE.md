@@ -95,6 +95,20 @@ Not yet established: agreement between two different cards of the same model
 (both L4 runs used one physical GPU), and agreement at the full 500-token
 length, where a single flipped argmax poisons everything after it.
 
+Decode cost at batch 1 scales with **layer count, not parameter count**. gpt2-xl
+costs 3.58x gpt2 per token (measured, 1080 Ti), against a 12.6x parameter ratio
+and a 4.0x layer ratio. Batch-1 decode is latency bound: layers are serial,
+width is absorbed in parallel. Any energy model assuming cost tracks parameter
+count overstates large models at batch 1 by roughly 3x.
+
+Greedy decoding degenerates with length. `distinct_token_ratio` is 0.938 at 16
+tokens, 0.562 at 32, and 0.019 at 960. A run can pass `work_hash`, report
+success, and still be measuring a KV-cache loop rather than inference. Validate
+workload content separately from workload reproducibility.
+
+Measured facts destined for the paper go in `paper/methods-notes.md`, not only
+into task docs.
+
 ## Current phase
 
 Phase 0: read-only GPU fleet census. Do not launch GPU workloads yet.

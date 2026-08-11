@@ -143,6 +143,50 @@ Keep generation short and clean, loop it N times, time the whole loop.
 **The choice is yours.** The factual constraint is only that Option A cannot
 reach the floor for either gpt2 configuration; it is not a preference.
 
+## Conclusion of the sizing work
+
+Option A is closed by measurement. No configuration reaches the 30 second floor
+by token count on modern hardware, and the 1024 context ceiling means no prompt
+or generation config can change that. **Repetition inside the timed region is
+the only route that reaches the floor uniformly across the fleet.**
+
+### What that measures, and what it does not
+
+Repeating a fixed generation N times inside one timed region measures
+**throughput inference: N independent decodes of the same prompt**. It does not
+measure single-request latency energy, and it does not measure long-context
+behaviour at all.
+
+Those are different research questions, and **the paper has to name which one
+it is answering.** The claim this design supports is of the form "energy per
+token for repeated short-form generation at batch 1". It does not support "energy
+to serve one long request", nor anything about how energy scales with context
+length. Stating that plainly in the methods section is cheaper than having it
+raised in review.
+
+The alternative framing, if long-context energy is the question worth asking,
+requires either a model with a context window larger than 1024 or accepting
+sub-floor runs with a documented measurement caveat. Both are larger changes
+than this task, and neither is available within the current model choices.
+
+### The two fixes converge
+
+This also disposes of the degeneracy problem, which is the reason to treat
+sizing and prompt design as one question rather than two.
+
+Degeneracy is a function of generation length, now measured:
+`distinct_token_ratio` 0.938 at 16 tokens, 0.562 at 32, 0.019 at 960. Short
+generations stay clean. Repetition reaches the floor by running many short clean
+generations instead of one long degenerate one, so the KV-cache-loop artifact
+never appears.
+
+Concretely: at roughly 64 to 128 tokens per generation the text is still mostly
+non-repetitive, and N is chosen to reach 30 seconds on the fastest card. The
+knee experiment then sets the per-generation length, since below the knee each
+individual decode is dominated by fixed costs no matter how many times it is
+repeated. Both constraints resolve into one number, which is what the sizing
+experiment exists to find.
+
 ### N is set by the fastest card, not the slowest
 
 Whichever option is chosen, the work must be identical across GPUs, so N or

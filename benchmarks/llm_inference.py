@@ -244,19 +244,39 @@ def _work_hash(new_tokens: torch.Tensor) -> str:
     return digest.hexdigest()
 
 
-def _longest_repeated_run(tokens: list) -> int:
-    """Length of the longest run of one repeated token id.
+def _longest_repeated_ngram(tokens: list) -> int:
+    """Length of the longest token sequence that occurs more than once.
 
-    A blunt degeneracy check. Greedy decoding that has collapsed into a loop
-    shows up here immediately.
+    Replaces an earlier check that counted consecutive identical token ids. That
+    version returned 2 on a 960 token gpt2-xl run whose output was one sentence
+    repeated to exhaustion, because a looping phrase contains no adjacent
+    duplicates. Phrase-level repetition is the failure mode greedy decoding
+    actually exhibits, so that is what this measures.
+
+    Binary search over length: "some n-gram of length L repeats" is monotone
+    decreasing in L, so the largest such L is findable in O(n log n) hashes.
     """
-    if not tokens:
+    n = len(tokens)
+    if n < 2:
         return 0
-    best = run = 1
-    for previous, current in zip(tokens, tokens[1:]):
-        run = run + 1 if current == previous else 1
-        best = max(best, run)
-    return best
+
+    def has_repeat(length: int) -> bool:
+        seen = set()
+        for start in range(n - length + 1):
+            gram = tuple(tokens[start : start + length])
+            if gram in seen:
+                return True
+            seen.add(gram)
+        return False
+
+    low, high = 0, n - 1
+    while low < high:
+        mid = (low + high + 1) // 2
+        if has_repeat(mid):
+            low = mid
+        else:
+            high = mid - 1
+    return low
 
 
 def _observed_hardware(device: str) -> dict:
@@ -450,7 +470,7 @@ def run(
     # distinct_token_ratio is the cheap numeric version of that judgement.
     generated_text = tokenizer.decode(rows[0], skip_special_tokens=True)
     distinct_token_ratio = len(set(rows[0])) / len(rows[0]) if rows[0] else 0.0
-    longest_repeat = _longest_repeated_run(rows[0])
+    longest_repeat = _longest_repeated_ngram(rows[0])
 
     prompt_hash = hashlib.sha256(PROMPT.encode("utf-8")).hexdigest()
     config_id = (
@@ -485,7 +505,7 @@ def run(
         # worthless as a benchmark workload, so these travel with every record.
         "generated_text": generated_text,
         "distinct_token_ratio": distinct_token_ratio,
-        "longest_repeated_run": longest_repeat,
+        "longest_repeated_ngram": longest_repeat,
         # Software versions
         "torch_version": torch.__version__,
         "transformers_version": transformers.__version__,
@@ -582,8 +602,8 @@ if __name__ == "__main__":
         result["node_name"],
     )
     logger.info(
-        "degeneracy: distinct_token_ratio=%.3f longest_repeated_run=%d",
+        "degeneracy: distinct_token_ratio=%.3f longest_repeated_ngram=%d",
         result["distinct_token_ratio"],
-        result["longest_repeated_run"],
+        result["longest_repeated_ngram"],
     )
     logger.info("generated text: %r", result["generated_text"])
