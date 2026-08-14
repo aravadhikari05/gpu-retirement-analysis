@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: matmul-test-veda
+  namespace: cmpm118
+spec:
+  restartPolicy: Never
+  containers:
+    - name: matmul
+      image: docker.io/vedajanga/matmul-bench:latest
+      args: ["--n", "8192", "--iters", "100", "--warmup", "10", "--out", "/results/matmul.csv"]
+      resources:
+        limits: {nvidia.com/gpu: 1, memory: 8Gi, cpu: "2"}
+        requests: {nvidia.com/gpu: 1, memory: 8Gi, cpu: "2"}
+      volumeMounts:
+        - name: results
+          mountPath: /results
+  volumes:
+    - name: results
+      persistentVolumeClaim:
+        claimName: matmul-results

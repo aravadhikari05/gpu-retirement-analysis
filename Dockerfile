@@ -1,14 +1,5 @@
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
-
-RUN apt-get update && apt-get install -y python3 python3-pip && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-RUN pip install transformers pynvml pandas
-
-COPY benchmarks/ /app/benchmarks/
-COPY measurement/ /app/measurement/
-
+FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+RUN pip install --no-cache-dir nvidia-ml-py
 WORKDIR /app
-
-ENTRYPOINT ["python3", "-m", "measurement.runner"]
+COPY matmul_benchmark.py power_monitor.py /app/
+ENTRYPOINT ["python", "matmul_benchmark.py"]

@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: reader-veda
+  namespace: cmpm118
+spec:
+  restartPolicy: Never
+  containers:
+    - name: reader
+      image: busybox
+      command: ["sleep", "3600"]     # stay alive 1 hour so we can read the disk
+      volumeMounts:
+        - name: results
+          mountPath: /results
+      resources:
+        limits: {memory: 256Mi, cpu: "200m"}
+        requests: {memory: 256Mi, cpu: "200m"}
+  volumes:
+    - name: results
+      persistentVolumeClaim:
+        claimName: matmul-results
