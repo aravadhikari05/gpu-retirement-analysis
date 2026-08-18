@@ -6,6 +6,11 @@ data/raw/*.json.gz
 *.db
 __pycache__/
 *.pyc
+.ruff_cache/
+.DS_Store
+
+# Local agent settings, per-machine
+.claude/
 
 # Credentials, never commit
 .s3cfg

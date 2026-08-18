@@ -1,0 +1,26 @@
+{
+  "planPath": "docs/superpowers/plans/2026-08-03-benchmark-container.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: Package scaffolding (stub files)",
+      "status": "pending",
+      "description": "**Goal:** Create importable `benchmarks` and `measurement` packages with placeholder files.\n\n**Files:**\n- Create: benchmarks/__init__.py, benchmarks/resnet_train.py, benchmarks/llm_inference.py, benchmarks/matmul.py\n- Create: measurement/__init__.py, measurement/power_monitor.py, measurement/runner.py\n\n**Acceptance Criteria:**\n- [ ] Both packages exist with __init__.py\n- [ ] Each placeholder file valid Python, no syntax errors\n- [ ] `python3 -c \"import benchmarks, measurement\"` succeeds\n\n**Verify:** `python3 -m py_compile benchmarks/*.py measurement/*.py && python3 -c \"import benchmarks, measurement\" && echo OK` → OK\n\n```json:metadata\n{\"files\": [\"benchmarks/__init__.py\", \"benchmarks/resnet_train.py\", \"benchmarks/llm_inference.py\", \"benchmarks/matmul.py\", \"measurement/__init__.py\", \"measurement/power_monitor.py\", \"measurement/runner.py\"], \"verifyCommand\": \"python3 -m py_compile benchmarks/*.py measurement/*.py && python3 -c \\\"import benchmarks, measurement\\\"\", \"acceptanceCriteria\": [\"Both packages exist with __init__.py\", \"Each placeholder file is valid Python\", \"import benchmarks, measurement succeeds\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Dockerfile + .dockerignore",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** Dockerfile that builds successfully, matching CLAUDE.md container spec.\n\n**Files:**\n- Create: Dockerfile\n- Create: .dockerignore\n\n**Acceptance Criteria:**\n- [ ] `docker build` completes without error\n- [ ] Image contains python3, torch, torchvision, transformers, pynvml, pandas\n- [ ] .dockerignore excludes .git, data/, results/, docs/\n\n**Verify:** `docker build -t gpu-retirement-analysis:test .` → build succeeds\n\n```json:metadata\n{\"files\": [\"Dockerfile\", \".dockerignore\"], \"verifyCommand\": \"docker build -t gpu-retirement-analysis:test .\", \"acceptanceCriteria\": [\"docker build completes without error\", \"image contains required packages\", \".dockerignore excludes git/data/results/docs\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: GitHub Actions build + push to GHCR",
+      "status": "pending",
+      "blockedBy": [2],
+      "description": "**Goal:** Auto build+push image to ghcr.io/aravadhikari05/gpu-retirement-analysis on push to main touching Dockerfile/benchmarks/measurement.\n\n**Files:**\n- Create: .github/workflows/docker.yml\n\n**Acceptance Criteria:**\n- [ ] Triggers on push to main for Dockerfile, benchmarks/**, measurement/**\n- [ ] Logs into ghcr.io using GITHUB_TOKEN\n- [ ] Pushes latest and sha-<short-sha> tags\n- [ ] packages: write permission declared\n\n**Verify:** After push to main, Actions tab shows green run, package appears on GHCR.\n\n```json:metadata\n{\"files\": [\".github/workflows/docker.yml\"], \"verifyCommand\": \"gh run list --workflow=docker.yml --limit 1\", \"acceptanceCriteria\": [\"workflow triggers on correct paths\", \"logs into ghcr.io via GITHUB_TOKEN\", \"pushes latest and sha tags\", \"packages: write permission set\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-08-03T00:00:00Z"
+}
