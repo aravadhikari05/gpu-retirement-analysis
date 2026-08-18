@@ -458,6 +458,54 @@ Still open for Veda and Aidan: whether `llm_inference.py` should adopt
 `docs/tasks/phase3-workload-sizing.md` is implemented. It currently runs one
 `generate()` per timed region, so it reports no `inner_iters` at all.
 
+### The record schema is convention, not enforcement, and it drifted
+
+Verified 2026-08-18 by comparing the three benchmarks' returned dicts. The
+runner-owned spine (identity, power, provenance) is standardized, because
+`runner.py` writes it. The benchmark payloads are not, because each `run()`
+hand-builds its own dict, so the required set lives only in the table above and
+in three separately typed functions. Three fields that mean the same thing are
+named or emitted differently:
+
+- `precision` on matmul and resnet, `precision_mode` on llm. The table above
+  names `precision` a required column, so llm rows leave it null and the value
+  hides under a second name. llm predates `benchmarks/_precision.py` and carries
+  its own `_set_precision`.
+- `work_hash_covers` on matmul and resnet, nothing on llm. The one field that
+  distinguishes the LLM's output-identity guarantee from the other two's
+  fixed-work guarantee is absent on the workload that actually has the strong
+  one.
+- `workload` on matmul and resnet, absent on llm, which reuses the runner's
+  `benchmark` key. Two keys for one concept.
+
+None of these crash. JSONL is sparse, so they surface as silent nulls in
+analysis, which is exactly the failure class the schema table exists to prevent.
+Grouping by `config_id` and the `work_hash` disagreement refusal both still hold,
+so nothing measured so far is wrong; the exposure is on the sweep's rows and on
+any query that reads a required column by name. The cause is that the contract is
+convention, and convention cannot fail loud.
+
+How you know what to record is not by listing available fields. It is the rule
+in "How the column set was chosen" above: write the Phase 8 aggregation first,
+then for each wrong answer it could still produce, add exactly the one field that
+forbids it, and stop when you cannot invent a new wrong answer.
+
+**Decided 2026-08-18, not yet built:** replace the convention with an enforced
+`WorkloadResult`. Required fields become constructor arguments, so a benchmark
+physically cannot return a record missing one; the error moves from a runtime
+null to an authoring-time construction error. Workload-specific fields go in an
+`extra` dict, and the runner reads `.to_row()`. The required set, derived by the
+rule above rather than by listing fields:
+
+`workload`, `config_id`, `work_hash`, `work_hash_kind` (`output` or `config`),
+`precision` (in `PRECISIONS`), `allow_tf32_matmul`, `allow_tf32_cudnn`,
+`inner_iters` (at least 1), `runtime_seconds` (above 0).
+
+This forces one open decision loud rather than silent: llm emits no `inner_iters`
+today, since it runs one `generate()` per timed region, so enforcement fails
+until it is set. The interim value is 1; the real fix is the
+repetition-in-the-timed-region change tracked under Unclaimed side work.
+
 ## Embodied carbon and grid intensity
 
 **All figures in this section are unsourced pending citation.** They came from a
@@ -666,31 +714,44 @@ anywhere, and the project premise is that an idle card never pays back a
 replacement. Adding idle sampling before the sweep is a few lines; after, it is a
 12 to 15 GPU-hour re-run. Decide the mechanism and implement it before Phase 6.
 
-### 4. Cross-card reproducibility checks
+### 4. Standardize the record schema, before the sweep (CRITICAL, blocks Phase 6)
+
+Rows are only partly standardized: the runner spine is, the benchmark payloads
+are not. See "The record schema is convention, not enforcement" in Output
+contract for the drift and the derivation rule. Fix before the sweep, not after,
+for the same reason as idle power: a missing `inner_iters` or `work_hash_kind` is
+not re-derivable from JSONL and would cost a re-run. Decided approach is an
+enforced `WorkloadResult` dataclass, required fields as constructor arguments
+plus an `extra` dict, `.to_row()` in the runner, required set derived in Output
+contract. Touches all three `run()` signatures, like the timed-region change did,
+so it pairs naturally with landing that branch. Forces the llm `inner_iters`
+decision; interim value is 1.
+
+### 5. Cross-card reproducibility checks
 
 - matmul and resnet `work_hash` compared across two different cards, never done.
 - LLM `work_hash` at the full 960-token length across two cards, and between two
   physical cards of the same model (both L4 runs used one GPU). Named open
   questions in Established results.
 
-### 5. Preflight each GPU model before its first measured run
+### 6. Preflight each GPU model before its first measured run
 
 `measurement/preflight.py` is per-card and has already falsified two documented
 assumptions. Run it on L4, L40S and 4090, the interesting comparisons, and record
 `min_observed_step_w` per model before trusting small energy differences.
 
-### 6. Phase 6, the sweep
+### 7. Phase 6, the sweep
 
-Blocked on 1, 2 and 3. 5 repetitions per model. Add a warmup-length axis to the
-sizing sweep rather than cutting warmup on an assumption; see Workload sizing.
+Blocked on 1, 2, 3 and 4. 5 repetitions per model. Add a warmup-length axis to
+the sizing sweep rather than cutting warmup on an assumption; see Workload sizing.
 
-### 7. Phase 7, embodied carbon (blocks Phase 8)
+### 8. Phase 7, embodied carbon (blocks Phase 8)
 
 Every figure in Embodied carbon is an unsourced placeholder. Source per GPU from
 the ACT model, vendor PCF reports and die sizes, in the style
 `paper/methods-notes.md` used for bandwidth. Ranges, not point values.
 
-### 8. Phase 8, carbon model
+### 9. Phase 8, carbon model
 
 Build `analysis/carbon_model.py` (`break_even_jobs`, `break_even_hours_per_year`,
 `payback_curve`). Do not implement the core inequality without reading
@@ -698,7 +759,7 @@ Build `analysis/carbon_model.py` (`break_even_jobs`, `break_even_hours_per_year`
 Break-even model exactly, since dropping the 3.6e6 conversion is wrong by 3.6
 million while still looking plausible.
 
-### 9. Phases 9 to 10, sensitivity and plots
+### 10. Phases 9 to 10, sensitivity and plots
 
 `analysis/sensitivity.py` and `analysis/plots.py`. Not started.
 
