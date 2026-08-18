@@ -168,8 +168,10 @@ used.
 `start()` begins a daemon sampling thread, `stop()` returns a `PowerResult`.
 
 `PowerResult` carries `energy_j`, `avg_power_w`, `peak_power_w`, `min_power_w`,
-`n_samples`, `duration_s`, `energy_j_counter`, `readings`, and exposes
-`as_dict()` so the CSV writer never reaches into attributes.
+`n_samples`, `duration_s`, `energy_j_counter`, `readings`, `power_window`, and
+exposes `as_dict()` so the CSV writer never reaches into attributes.
+`PowerMonitor` also exposes `mark_region_start()` / `mark_region_end()`, called
+by `RunContext` to scope energy to the timed region; see the subsection below.
 
 - Keep `energy_j_counter`. It reads NVML's hardware energy counter
   (`nvmlDeviceGetTotalEnergyConsumption`) and is an independent check on the
@@ -213,6 +215,39 @@ differences.
 
 Still unverified on every other GPU model.
 
+### Energy is scoped to the timed region, not the whole run
+
+Implemented on branch `timed-region-energy-window` (2026-08-18), not yet on
+`main`, and **verified on CPU only**.
+
+The runner previously wrapped `PowerMonitor.start()`/`stop()` around all of
+`module.run()`, so `energy_j` integrated the model load (roughly 60 s from
+cephfs on gpt2-xl) and the warmup alongside the timed loop, while
+`runtime_seconds` covered only the loop. The two windows disagreed and energy
+per unit of work was overstated with no visible symptom.
+
+`benchmarks/_context.py` adds `RunContext.timed_region(device)`. Each workload
+runs its measured loop inside it; the context syncs at both boundaries and calls
+`monitor.mark_region_start()` / `mark_region_end()`. `PowerMonitor.stop()` then
+scopes both the trapezoidal integral and the NVML energy counter delta to that
+window, clipping the sample trace with interpolated endpoints, and records
+`power_window` (`region` when marked, `full_run` when not). The full sample
+trace is still written for cached-reading diagnosis; only the summary is scoped.
+`runner.py` passes the context in as `run(ctx=..., **kwargs)`, so the benchmark
+call contract changed: every `run()` now takes a `ctx` keyword.
+
+Integration stays in the monitor, not the runner, because the monitor owns both
+the sample trace and the NVML handle. Scoping the integral while leaving the
+counter whole-run would compare two windows and break the 0.59%
+counter-versus-integral cross-check.
+
+Verified on CPU with synthetic traces: a constant 200 W trace over a carved
+region integrates exactly (7000 J over 35 s), boundary interpolation is exact on
+a ramp (9000 J), the counter delta is region-scoped, and an unmarked run still
+reports the whole window. **The region path has never run on a GPU.** The first
+hardware run must confirm the region counter delta still agrees with the region
+integral, the way the whole-run versions did.
+
 ## Library version traps
 
 Established the hard way on 2026-08-11. All of these fail silently, which is
@@ -255,9 +290,10 @@ why they are written down.
   stand, but "the card is not running its own optimised cubin" is a caveat worth
   a sentence in methods.
 - `requirements.txt` pins `transformers==5.15.0`, the version that produced the
-  verified `work_hash`. The Dockerfile does not install from it, so the pin does
-  not currently reach the image. Closing that gap is part of the Dockerfile work
-  below.
+  verified `work_hash`. The Dockerfile now installs from it (`COPY
+  requirements.txt` then `pip install -r`), so the pin reaches the image; this
+  was the gap the 2026-08-18 Dockerfile revert closed. Do not go back to a loose
+  `pip install transformers`, which is what let the pin drift before.
 
 ## Container builds
 
@@ -401,6 +437,7 @@ column, and you stop when you cannot invent a new one.
 | Average runs that did different work | `work_hash` |
 | Report n=5 for a model measured on one card | `gpu_uuid` |
 | Compare runs built from different images | `image_ref`, `git_commit` |
+| Average region energy against whole-run energy | `power_window` |
 
 `gpu_uuid` earns its place from evidence: the two L4 runs on 2026-08-11 both
 used `GPU-e82f7d3b`, and the 1080 Ti runs used two different physical cards.
@@ -528,7 +565,7 @@ Verified against the repo on 2026-08-18. Phase numbers follow `docs/phases.md`.
 | 1 Census | Done | `data/processed/census_fleet.csv`, `census_nodes.csv`, `k8s/inventory.sh`, `k8s/summarize_census.py`. Task doc is `docs/tasks/phase0-census.md`; the filename says phase0 but the work is Phase 1. |
 | 2 Container | **Done, verified on hardware** | `nvidia/cuda:12.1.0-runtime-ubuntu22.04`, pinned `torch==2.5.1` / `torchvision==0.20.1`, installs from `requirements.txt`, copies both packages. Built and pulled on a 1080 Ti 2026-08-18. Open: which registry is authoritative, see below. |
 | 3 Workloads | Written, 1 of 3 measured | All three emit `work_hash` and set TF32 explicitly, and all three emit `config_id`. LLM measured, `data/raw/llm_smoke/`, 7 runs across 3 GPU models. ResNet and matmul have never run on a GPU. |
-| 4 Power | Verified standalone, never attached | `power_monitor.py` and `runner.py` implemented. NVML, the energy counter and power sampling all verified on a 1080 Ti via preflight. **Never yet run wrapped around an actual benchmark**, so no `energy_j` exists for any workload. |
+| 4 Power | Implemented, energy now region-scoped, never attached on GPU | `power_monitor.py` and `runner.py` implemented. NVML, the energy counter and power sampling all verified on a 1080 Ti via preflight. Energy is scoped to the timed region via `benchmarks/_context.py` (branch `timed-region-energy-window`, CPU-verified only). **Never yet run wrapped around a benchmark on a GPU**, so no `energy_j` exists for any workload. |
 | 5 Storage | **Not done, blocking** | `k8s/benchmark-pod.yaml` is a stub, so nothing is schedulable. Three unrelated PVC yamls exist, no canonical one. |
 | 6 Sweep | Not started | Blocked on Phase 5 and on the idle-power decision in `docs/tasks/phase8-break-even-inputs.md`. |
 | 7 Embodied carbon | Not started | Every figure is an unsourced placeholder. Blocks Phase 8. |
@@ -574,6 +611,10 @@ not building the pod image.
   until 2026-08-18 and has not been re-exercised on hardware.
 - No benchmark has yet been run through the runner with power attached, so no
   `energy_j` figure exists for any actual workload.
+- The timed-region energy scoping (`benchmarks/_context.py`, branch
+  `timed-region-energy-window`) has run on CPU with synthetic traces only. On a
+  GPU it must confirm the region counter delta agrees with the region integral,
+  and that `power_window` reads `region`.
 
 ### Next: k8s plumbing, which is not done
 
@@ -584,3 +625,107 @@ pre-staged model cache for the LLM workload
 separately needs `/results/data/cifar10` writable, since it downloads CIFAR-10
 during setup. It should also set `NODE_NAME` from the downward API, which is
 where `runner.py` reads the node name from.
+
+## To-do list, in pickup order
+
+Written 2026-08-18 for the next session. Ordered by the critical path: each
+blocked item names what unblocks it. Owners are suggestions from this file's
+existing assignments, not fixed. Before starting any item, check `git log` and
+live Nautilus pod and PVC state, per the hard rule about stubs and teammates'
+in-progress work.
+
+### 0. Merge the timed-region branch (Arav)
+
+Branch `timed-region-energy-window` holds the energy-window fix (two commits),
+CPU-verified only, pushed nowhere yet. It changes the benchmark call contract
+(`run(..., ctx=)`), so any teammate editing a workload needs it merged first.
+Decide whether it lands on `main` before or after the first GPU run.
+
+### 1. Phase 5, k8s storage (CRITICAL, blocks everything below)
+
+`k8s/benchmark-pod.yaml` is a one-line stub, so nothing is schedulable. A
+working pod spec needs:
+
+- Two PVCs mounted: a results PVC, and the pre-staged LLM model cache
+  (`k8s/aidan-llm-models-pvc.yaml`, staged by `aidan-llm-prep-job.yaml`).
+- `/results/data/cifar10` writable, since resnet downloads CIFAR-10 in setup.
+- Env from the downward API: `NODE_NAME` (runner reads it), plus `IMAGE_REF` and
+  `GIT_COMMIT`, which `runner.py` records as provenance from env and leaves blank
+  if unset.
+- One canonical PVC yaml. Three unrelated ones exist; pick one, prefix it with an
+  owner name, delete or document the rest.
+
+### 2. First GPU run with power attached (CRITICAL, validates Phases 3, 4 and the branch)
+
+No benchmark has ever run through `runner.py` with power on a GPU, so no
+`energy_j` exists for any workload. On the first run, on the 1080 Ti:
+
+- Confirm `runner.py` runs end to end and writes `runs.jsonl` with `energy_j`.
+- Confirm timed-region scoping works on hardware: `power_window` is `region`, and
+  the region counter delta agrees with the region integral the way the whole-run
+  versions agreed to 0.59%. This is the one part of the branch never run on a GPU.
+- Run all three workloads. matmul and resnet have never run on a GPU at all.
+
+### 3. Idle-power decision, before the sweep (CRITICAL, blocks Phase 6)
+
+Read `docs/tasks/phase8-break-even-inputs.md` first. Idle power is not measured
+anywhere, and the project premise is that an idle card never pays back a
+replacement. Adding idle sampling before the sweep is a few lines; after, it is a
+12 to 15 GPU-hour re-run. Decide the mechanism and implement it before Phase 6.
+
+### 4. Cross-card reproducibility checks
+
+- matmul and resnet `work_hash` compared across two different cards, never done.
+- LLM `work_hash` at the full 960-token length across two cards, and between two
+  physical cards of the same model (both L4 runs used one GPU). Named open
+  questions in Established results.
+
+### 5. Preflight each GPU model before its first measured run
+
+`measurement/preflight.py` is per-card and has already falsified two documented
+assumptions. Run it on L4, L40S and 4090, the interesting comparisons, and record
+`min_observed_step_w` per model before trusting small energy differences.
+
+### 6. Phase 6, the sweep
+
+Blocked on 1, 2 and 3. 5 repetitions per model. Add a warmup-length axis to the
+sizing sweep rather than cutting warmup on an assumption; see Workload sizing.
+
+### 7. Phase 7, embodied carbon (blocks Phase 8)
+
+Every figure in Embodied carbon is an unsourced placeholder. Source per GPU from
+the ACT model, vendor PCF reports and die sizes, in the style
+`paper/methods-notes.md` used for bandwidth. Ranges, not point values.
+
+### 8. Phase 8, carbon model
+
+Build `analysis/carbon_model.py` (`break_even_jobs`, `break_even_hours_per_year`,
+`payback_curve`). Do not implement the core inequality without reading
+`docs/tasks/phase8-break-even-inputs.md`; it has six gaps. Use the units line in
+Break-even model exactly, since dropping the 3.6e6 conversion is wrong by 3.6
+million while still looking plausible.
+
+### 9. Phases 9 to 10, sensitivity and plots
+
+`analysis/sensitivity.py` and `analysis/plots.py`. Not started.
+
+### Unclaimed side work, no ordering
+
+- **LLM `inner_iters`.** `llm_inference.py` runs one `generate()` per timed
+  region and reports no `inner_iters`. Whether it adopts the
+  repetition-inside-the-timed-region design is open for Veda and Aidan, and ties
+  to Workload sizing.
+- **ruff config.** No `pyproject.toml` or `ruff.toml`, so `ruff check` enforces
+  only defaults, not the type-hint, docstring or naming rules in Coding
+  conventions. Adding one that actually checks them is unclaimed.
+- **Registry authority.** Decide GHCR (GitHub Actions, where the verified image
+  was pulled from) against `gitlab-registry.nrp-nautilus.io` (still named in
+  Cluster environment). This clone has no `gitlab` remote. Reconcile the two
+  notes once decided.
+- **Dockerfile comment.** `Dockerfile` line 4 still says the cu121 wheels "carry
+  sm_61". Measurement corrected that; the practical conclusion holds but the
+  comment is wrong. See Library version traps.
+- **Phase numbering.** `docs/phases.md` uses 1 to 10; a separate team plan
+  Prof. Jullig uses has 7 phases, and `matmul.py` cites a Phase 8 that neither
+  scheme places cleanly. If the team plan becomes canonical, add a mapping rather
+  than renaming task docs, to keep commit and PR links alive.
