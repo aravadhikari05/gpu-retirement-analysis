@@ -63,10 +63,41 @@ why they are written down.
   on some symbols when both are present. torch itself warns about this on
   import. NVML currently works, but fall back to `nvidia-smi` rather than
   leaving `driver_version` blank, and record which source answered.
-- The `cu121` index URL in the Dockerfile is load-bearing, not incidental.
-  PyTorch stopped publishing cu121 wheels after 2.5.1, and those wheels still
-  carry `sm_61`. Newer CUDA 12.8 builds dropped Pascal. The GTX 1080 Ti works
-  because of that URL.
+- The GTX 1080 Ti works because the torch wheel carries `sm_60`, not `sm_61`.
+  Corrected 2026-08-17. This note previously said the cu121 wheels carry
+  `sm_61` and that the index URL is what makes Pascal work. Both are wrong.
+  Neither the cu121 nor the cu124 build of torch 2.5.1 has ever contained
+  `sm_61`. Both are built with
+  `TORCH_CUDA_ARCH_LIST="5.0;6.0;7.0;7.5;8.0;8.6;9.0"`, with no `+PTX`
+  (`pytorch/builder`, branch `release/2.5`, `manywheel/build_cuda.sh`, the
+  arch list and the `case ${CUDA_VERSION}` block that follows it). The two
+  builds produce byte-identical arch lists.
+
+  Pascal is major revision 6, and NVIDIA guarantees that a cubin built for
+  compute capability X.y runs on devices of X.z where z is greater than or
+  equal to y within the same major revision. So the `sm_60` cubin executes on
+  the sm_61 card. See the CUDA C++ Programming Guide, Binary Compatibility.
+
+  **Pin on the presence of `6.0` in the arch list. Not on the CUDA version,
+  and not on the index URL.** These are not interchangeable. A build labelled
+  cu121 with 6.0 dropped would fail on Pascal, and a cu124 build that retains
+  6.0 works fine. Reading the label instead of the arch list is the specific
+  error this note exists to prevent, and the old wording invited it.
+
+  The forward-drift warning still stands, with a corrected reason. PyTorch
+  removed Maxwell and Pascal from the CUDA 12.8 binaries starting with torch
+  2.8, so any move forward on torch or CUDA needs the arch list re-checked
+  against the build script before it is adopted.
+
+  Open verification, as of 2026-08-17. The above was established from
+  PyTorch's published build configuration, not by executing
+  `torch.cuda.get_arch_list()` inside the image. One line in any pod already
+  running the image closes it, and it should be run before the Phase 3 sweep,
+  because the old end of the generational ladder depends on the answer. The
+  empirical support so far is indirect but real: the 1080 Ti run recorded in
+  `data/raw/llm_smoke/20260811t183732z-gtx1080ti.json` succeeded under cu121,
+  which carries no `sm_61` either, so that run was already taking the `sm_60`
+  path.
 
 ## Container builds
 
