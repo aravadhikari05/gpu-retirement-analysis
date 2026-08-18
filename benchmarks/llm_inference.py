@@ -27,7 +27,6 @@ import json
 import logging
 import os
 import subprocess
-import time
 
 # Offline enforcement must be in place before huggingface_hub is imported, so it
 # is set here rather than relying only on the pod env. local_files_only=True on
@@ -38,6 +37,8 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 import torch
 import transformers
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from benchmarks._context import RunContext
 
 logger = logging.getLogger(__name__)
 
@@ -376,6 +377,7 @@ def run(
     device: str = "cuda:0",
     cache_dir: str = DEFAULT_CACHE_DIR,
     deterministic: bool = False,
+    ctx: RunContext | None = None,
 ) -> dict:
     """Runs the fixed-work GPT-2 token generation benchmark.
 
@@ -391,6 +393,10 @@ def run(
       deterministic: Diagnostic only. Off by default because deterministic
         algorithms change kernel selection and therefore energy, which is the
         quantity the surrounding measurement exists to capture.
+      ctx: Timed-region context supplied by measurement/runner.py, which scopes
+        power measurement to the timed generate() and excludes the model load
+        (roughly 60 s from cephfs on gpt2-xl) and warmup. A monitor-less one is
+        created for a standalone CLI run.
 
     Returns:
       dict of runtime_seconds, work_hash, warmup_iters, plus the full metadata
@@ -406,6 +412,9 @@ def run(
         raise ValueError(f"max_new_tokens must be >= 1, got {max_new_tokens}")
     if warmup_iters < 0:
         raise ValueError(f"warmup_iters must be >= 0, got {warmup_iters}")
+
+    # A monitor-less context for standalone CLI runs; the runner passes its own.
+    ctx = ctx or RunContext()
 
     if deterministic:
         logger.warning(
@@ -448,11 +457,12 @@ def run(
             max_new_tokens,
             precision,
         )
-        _sync(device)
-        start = time.perf_counter()
-        outputs = model.generate(**generate_kwargs)
-        _sync(device)
-        runtime_seconds = time.perf_counter() - start
+        # ctx.timed_region syncs at both boundaries and marks them on the power
+        # monitor, so energy covers exactly this generate() and excludes the
+        # model load and warmup above.
+        with ctx.timed_region(device):
+            outputs = model.generate(**generate_kwargs)
+        runtime_seconds = ctx.region_runtime_s
 
     new_tokens = outputs[:, prompt_len:].to("cpu").to(torch.int64).contiguous()
     if int(new_tokens.shape[1]) != max_new_tokens:
