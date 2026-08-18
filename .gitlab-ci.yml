@@ -7,6 +7,31 @@ build-and-push-job:
   stage: build-and-push
   variables:
     GODEBUG: "http2client=0"
+  # Only build when something that lands in the image actually changed. This
+  # mirrors the path filter already present in .github/workflows/docker.yml,
+  # which had it while this job, the one that builds the image the pods really
+  # run, did not.
+  #
+  # Without this the job fires on every push to every branch. At 7.71 GB and a
+  # 16 minute push that means docs, task specs, CSVs and paper notes each cost
+  # a multi-GB push to the shared NRP registry, which is the pressure that
+  # stalled it during pipeline 86061.
+  #
+  # Consequence to know about: a commit touching only docs now produces no
+  # SHA-tagged image. That is intended. Pods pin by digest, so nothing breaks,
+  # but do not assume every commit has a corresponding tag in the registry.
+  rules:
+  - changes:
+    - Dockerfile
+    - requirements.txt
+    - benchmarks/**/*
+    - measurement/**/*
+    when: on_success
+  # Escape hatch for a rebuild with no source change, for example when a base
+  # image moves underneath us. allow_failure keeps an unclicked manual job from
+  # blocking the pipeline.
+  - when: manual
+    allow_failure: true
   script:
   - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
   # Every branch gets a SHA-tagged image, which is what the benchmark pods pin
