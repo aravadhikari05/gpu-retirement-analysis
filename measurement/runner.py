@@ -88,7 +88,11 @@ def _observed_hardware() -> dict:
         pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         name = pynvml.nvmlDeviceGetName(handle)
-        driver = pynvml.nvmlDeviceGetDriverVersion()
+        # nvmlSystemGetDriverVersion, not nvmlDeviceGetDriverVersion. The latter
+        # does not exist; calling it raises AttributeError, which this function
+        # catches, so the only symptom was hardware_source silently reading
+        # "nvidia-smi" on every run. Found by preflight on 2026-08-18.
+        driver = pynvml.nvmlSystemGetDriverVersion()
         pynvml.nvmlShutdown()
         fields["gpu_model_observed"] = (
             name.decode() if isinstance(name, bytes) else name

@@ -165,10 +165,25 @@ used.
 `as_dict()` so the CSV writer never reaches into attributes.
 
 - Keep `energy_j_counter`. It reads NVML's hardware energy counter
-  (`nvmlDeviceGetTotalEnergyConsumption`, Volta and later) and is an
-  independent check on the trapezoidal integral. It is `None` on Pascal, so the
-  GTX 1080 Ti has no cross-check and the integral is the only number there.
-  Record that asymmetry per run rather than averaging over it.
+  (`nvmlDeviceGetTotalEnergyConsumption`) and is an independent check on the
+  trapezoidal integral.
+
+  **Measured 2026-08-18: it works on the GTX 1080 Ti.** This was expected to be
+  Volta and later, leaving Pascal with no cross-check. It is not. On driver
+  580.159.04 the counter returned 6156.768 J against an integral of 6120.726 J
+  over the same window, agreeing to **0.59%**. A second run agreed to 0.88%. In
+  both the counter reads slightly higher, which is the expected direction since
+  the integral cannot cover the gap between the last sample and `stop()`.
+
+  Do not assume availability by architecture. `PowerMonitor` probes for it and
+  records `None` when it is genuinely absent, which is still the right design;
+  the assumption about which cards have it was simply wrong.
+
+- The NVML call for the driver is `nvmlSystemGetDriverVersion`.
+  `nvmlDeviceGetDriverVersion` does not exist. Calling it raises
+  `AttributeError`, which both `preflight.py` and `runner.py` caught, so the
+  only symptom was `hardware_source` quietly reading `nvidia-smi` on every run
+  instead of `pynvml`. Fixed 2026-08-18.
 - Restore `readings`, the timestamped sample list. The working implementation
   discards samples on `stop()`, which makes the per-run power trace CSV
   impossible to write. The trace is also the only way to detect the cached
@@ -178,11 +193,18 @@ used.
   otherwise report success on a truncated trace. The skipped count is recorded
   as `n_failed_power_samples`.
 
-**Unverified.** No measured run has exercised the power monitor yet. The
-integral is unit-tested against synthetic samples, but nothing has confirmed on
-this cluster that `nvidia-ml-py` resolves
-`nvmlDeviceGetTotalEnergyConsumption`, nor that NVML reports sane wattage on
-each card. Do that before trusting any `energy_j` figure.
+**Verified on one card, 2026-08-18.** GTX 1080 Ti, `k8s-gpu-2.ucsc.edu`:
+`nvidia-ml-py` is the resolved NVML provider, the energy counter works, and
+sampling is sane. 132 samples over 26.5 s, idle 55.03 W to 237.67 W under load,
+against an nvidia-smi power limit of 300 W. `n_failed_power_samples` was 0.
+
+Power granularity on this card is **0.001 W**, with 130 distinct values across
+132 samples. The pitfall below about coarse 25 W quantisation does not apply to
+the 1080 Ti. It may still apply to older cards; `preflight.py` reports
+`min_observed_step_w` per model, so run it on each before trusting small energy
+differences.
+
+Still unverified on every other GPU model.
 
 ## Library version traps
 
@@ -203,9 +225,28 @@ why they are written down.
   import. NVML currently works, but fall back to `nvidia-smi` rather than
   leaving `driver_version` blank, and record which source answered.
 - The `cu121` index URL in the Dockerfile is load-bearing, not incidental.
-  PyTorch stopped publishing cu121 wheels after 2.5.1, and those wheels still
-  carry `sm_61`. Newer CUDA 12.8 builds dropped Pascal. The GTX 1080 Ti works
-  because of that URL.
+  PyTorch stopped publishing cu121 wheels after 2.5.1 and newer CUDA 12.8 builds
+  dropped Pascal, so the GTX 1080 Ti works because of that URL.
+
+  **Corrected 2026-08-18 by measurement.** This entry previously said the cu121
+  wheels "still carry `sm_61`". They do not. `torch.cuda.get_arch_list()` on
+  torch 2.5.1+cu121 returns `sm_50, sm_60, sm_70, sm_75, sm_80, sm_86, sm_90`,
+  with no `sm_61`. The GTX 1080 Ti is `sm_61` and runs correctly anyway, because
+  CUDA cubins are forward compatible across minor revisions within a major
+  generation: the `sm_60` cubin executes on an `sm_61` device, though not the
+  reverse. Verified on `k8s-gpu-2.ucsc.edu`, driver 580.159.04, matmul checksum
+  finite and 230 W drawn under load. Record in
+  `data/raw/preflight/20260818T084227Z-gtx1080ti.json`.
+
+  The practical conclusion is unchanged and the pin still matters. What changes
+  is the test: do not check for an exact `sm_XY` match, because that gives a
+  false negative on every Pascal consumer card. Check for any `sm_X*` with a
+  minor version at or below the device's. `measurement/preflight.py` does this.
+
+  Open question for the paper: the 1080 Ti is running kernels tuned for GP100
+  rather than GP102. That does not affect correctness and the measured runtimes
+  stand, but "the card is not running its own optimised cubin" is a caveat worth
+  a sentence in methods.
 - `requirements.txt` pins `transformers==5.15.0`, the version that produced the
   verified `work_hash`. The Dockerfile does not install from it, so the pin does
   not currently reach the image. Closing that gap is part of the Dockerfile work
@@ -423,23 +464,38 @@ The root duplicates are resolved: `matmul_benchmark.py` and `power_monitor.py`
 moved into `benchmarks/matmul.py` and `measurement/power_monitor.py`, and the
 root copies deleted.
 
+### Verified on hardware, 2026-08-18
+
+GTX 1080 Ti on `k8s-gpu-2.ucsc.edu`, image
+`ghcr.io/aravadhikari05/gpu-retirement-analysis:sha-d53ab4f7`, via
+`k8s/arav-preflight-job.yaml`. Records in `data/raw/preflight/`.
+
+- The image builds and runs on Nautilus. All pins landed: torch 2.5.1+cu121,
+  torchvision 0.20.1+cu121, transformers 5.15.0, python 3.10.12.
+- The 1080 Ti computes correctly, via `sm_60` forward compatibility rather than
+  the `sm_61` this file previously claimed. See the version traps section.
+- NVML works through `nvidia-ml-py`, including the energy counter, agreeing with
+  the integral to 0.59%.
+- Power sampling is sane and finely grained on this card.
+
+**Note on the registry.** This was pulled from GHCR, built by GitHub Actions,
+not from `gitlab-registry.nrp-nautilus.io`. The GHCR package is public, so
+Nautilus pulls it anonymously. This clone has no `gitlab` remote, so the
+Nautilus registry image cannot be built from here at all. Either add that remote
+or treat GHCR as the image source and update the note above about GitHub Actions
+not building the pod image.
+
 ### What is still unverified
 
-Nothing in Phase 2, 3 or 4 above has run on hardware since the 2026-08-18
-changes. Specifically not yet done, and not to be described as working until it
-is:
-
-- The image has not been built. The Dockerfile is a revert to a form that built
-  before, plus pinned versions and a `requirements.txt` install, so it is
-  plausible rather than proven.
-- No GPU has been sampled. `energy_j`, `energy_j_counter` and every power column
-  are untested against real hardware.
-- `nvidia-ml-py` has not been confirmed to resolve
-  `nvmlDeviceGetTotalEnergyConsumption` on this cluster.
-- `resnet_train.py` and `matmul.py` have never run on a GPU at all. They have
-  only been syntax and lint checked.
-- The 1080 Ti has not been re-checked against the pinned wheels. `sm_61` support
-  is the reason for the cu121 pin and is the thing most worth confirming first.
+- Every GPU model except the GTX 1080 Ti. Preflight is per-card and the
+  interesting comparisons are against L4, L40S and 4090.
+- `resnet_train.py` and `matmul.py` have never run on a GPU. Syntax and lint
+  only. Their `work_hash` values have never been compared across two cards.
+- `measurement/runner.py` has never run end to end on a GPU. Its write path is
+  tested locally with a stub benchmark, and its NVML provenance path was broken
+  until 2026-08-18 and has not been re-exercised on hardware.
+- No benchmark has yet been run through the runner with power attached, so no
+  `energy_j` figure exists for any actual workload.
 
 ### Next: k8s plumbing, which is not done
 

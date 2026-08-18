@@ -1,0 +1,88 @@
+# Per-GPU preflight check. Run once per GPU model before trusting its data.
+#
+# Render with envsubst, requires: IMAGE, GPU_SLUG, GPU_PRODUCT
+#
+# Answers on real hardware what CLAUDE.md currently records as unverified:
+# whether this torch build carries the card's sm_XX, whether NVML resolves the
+# energy counter, and at what granularity the card reports wattage.
+#
+# preflight.py is supplied by a ConfigMap rather than baked into the image,
+# because it was written after the image that is being tested was built.
+# Mounting it avoids a second 20-plus minute build cycle to test the first one.
+# Once it is committed and built in, drop the volume and the ConfigMap.
+#
+# Conventions copied from k8s/aidan-llm-smoke-job.yaml, which worked:
+#   backoffLimit 0        a retry could land on a different card
+#   ttlSecondsAfterFinished  server-side cleanup, survives the VPN dropping
+#   activeDeadlineSeconds    frees the GPU regardless of what any client does
+#   no priorityClassName     high-priority-ban and low-priority-ban in cmpm118
+#                            are both pods=0; unset matches neither selector
+#
+# NAMING. CLAUDE.md says to prefix every resource with `aidan`. That rule reads
+# as written for a single deployer: Aidan uses `aidan-`, Veda used a `-veda`
+# suffix, and this uses `arav-`. The intent is per-person namespacing in a
+# shared namespace. Worth restating the rule as "prefix with your own name".
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: arav-preflight-${GPU_SLUG}
+  namespace: cmpm118
+  labels:
+    app: arav-preflight
+    aidan.ucsc.edu/owner: arav
+    aidan.ucsc.edu/gpu-slug: "${GPU_SLUG}"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app: arav-preflight
+        aidan.ucsc.edu/owner: arav
+        aidan.ucsc.edu/gpu-slug: "${GPU_SLUG}"
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        nvidia.com/gpu.product: "${GPU_PRODUCT}"
+      containers:
+      - name: preflight
+        image: ${IMAGE}
+        # Overrides the image ENTRYPOINT, which is measurement/runner.py.
+        command:
+        - python3
+        - -m
+        - measurement.preflight
+        - --power-seconds=20
+        env:
+        # Downward API rather than the census. CLAUDE.md requires the node be
+        # observed at runtime, and kubectl get node <name> is Forbidden for us.
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        resources:
+          requests:
+            nvidia.com/gpu: 1
+            cpu: "2"
+            memory: 8Gi
+            ephemeral-storage: 16Gi
+          limits:
+            nvidia.com/gpu: 1
+            cpu: "2"
+            memory: 8Gi
+            ephemeral-storage: 16Gi
+        volumeMounts:
+        # subPath overlays the single file into the package directory that
+        # already exists in the image, leaving the rest of measurement/ intact.
+        - name: preflight-src
+          mountPath: /app/measurement/preflight.py
+          subPath: preflight.py
+      volumes:
+      - name: preflight-src
+        configMap:
+          name: arav-preflight-src
