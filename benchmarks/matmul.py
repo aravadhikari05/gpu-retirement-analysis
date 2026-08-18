@@ -31,10 +31,10 @@ import argparse
 import hashlib
 import logging
 import platform
-import time
 
 import torch
 
+from benchmarks._context import RunContext, sync_device
 from benchmarks._precision import set_precision
 
 logger = logging.getLogger(__name__)
@@ -58,18 +58,6 @@ def _pick_device() -> str:
     return "cpu"
 
 
-def _sync(device: str) -> None:
-    """Waits for the device to actually finish.
-
-    Without this the timer measures kernel launch time rather than compute time,
-    which is the single most common benchmarking error.
-    """
-    if device.startswith("cuda"):
-        torch.cuda.synchronize()
-    elif device.startswith("mps"):
-        torch.mps.synchronize()
-
-
 def _detect_gpu_model(device: str, override: str | None) -> str:
     """Prefers an explicit override matching the nvidia.com/gpu.product label."""
     if override:
@@ -88,6 +76,7 @@ def run(
     precision: str = "fp32",
     device: str = "",
     gpu_model: str = "",
+    ctx: RunContext | None = None,
 ) -> dict:
     """Runs the fixed-work matrix multiplication benchmark.
 
@@ -99,6 +88,9 @@ def run(
         explicitly; "tf32" enables it.
       device: Torch device string. Auto-detected when empty.
       gpu_model: Explicit GPU label. Auto-detected when empty.
+      ctx: Timed-region context supplied by measurement/runner.py, which scopes
+        power measurement to the timed loop. A monitor-less one is created for a
+        standalone CLI run.
 
     Returns:
       dict with runtime_seconds, work_hash, total_flops and the metadata needed
@@ -112,6 +104,8 @@ def run(
         raise ValueError(f"warmup must be >= 0, got {warmup}")
 
     device = device or _pick_device()
+    # A monitor-less context for standalone CLI runs; the runner passes its own.
+    ctx = ctx or RunContext()
     precision_record, dtype = set_precision(precision, device)
 
     # Seeded on the CPU then moved, so the values do not depend on the device
@@ -126,17 +120,17 @@ def run(
 
     for _ in range(warmup):
         c = a @ b
-    _sync(device)
+    sync_device(device)
 
     logger.info(
         "Timed region: %d x %d matmul, %d iters, precision %s", n, n, iters, precision
     )
-    _sync(device)
-    start = time.perf_counter()
-    for _ in range(iters):
-        c = a @ b
-    _sync(device)
-    runtime_seconds = time.perf_counter() - start
+    # ctx.timed_region syncs at both boundaries and marks them on the power
+    # monitor, so energy covers exactly this loop and not the warmup above.
+    with ctx.timed_region(device):
+        for _ in range(iters):
+            c = a @ b
+    runtime_seconds = ctx.region_runtime_s
 
     total_flops = 2 * (n**3) * iters
 

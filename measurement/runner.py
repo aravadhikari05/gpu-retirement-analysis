@@ -177,6 +177,8 @@ def run_once(
     """Runs one repetition with power monitoring and writes its results."""
     module = importlib.import_module(BENCHMARKS[benchmark])
 
+    from benchmarks._context import RunContext
+
     monitor = None
     if monitor_gpu:
         from measurement.power_monitor import PowerMonitor
@@ -184,10 +186,17 @@ def run_once(
         monitor = PowerMonitor()
         monitor.start()
 
+    # The context carries the monitor so the workload's timed_region marks the
+    # exact window energy is integrated over. Without this the monitor covers the
+    # whole run(), including model load and warmup, while runtime_seconds covers
+    # only the region: the two windows disagree and energy per unit of work is
+    # overstated with no visible symptom. See benchmarks/_context.py.
+    ctx = RunContext(monitor)
+
     failure = None
     record = {}
     try:
-        record = module.run(**kwargs)
+        record = module.run(ctx=ctx, **kwargs)
     except Exception as exc:
         # Kept with an explicit exclusion reason rather than vanishing, per the
         # repo convention. The row is written below and then the exception is

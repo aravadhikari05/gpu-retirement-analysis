@@ -33,7 +33,6 @@ import argparse
 import hashlib
 import json
 import logging
-import time
 
 import torch
 import torch.nn as nn
@@ -42,6 +41,7 @@ import torchvision
 from torch.utils.data import DataLoader, Subset
 from torchvision import transforms
 
+from benchmarks._context import RunContext, sync_device
 from benchmarks._precision import set_precision
 
 logger = logging.getLogger(__name__)
@@ -101,6 +101,7 @@ def run(
     data_dir: str = DEFAULT_DATA_DIR,
     device: str = "cuda:0",
     precision: str = "fp32",
+    ctx: RunContext | None = None,
 ) -> dict:
     """Runs the fixed-work ResNet-50 training benchmark.
 
@@ -111,12 +112,17 @@ def run(
       device: CUDA device string.
       precision: One of benchmarks._precision.PRECISIONS. "fp32" disables TF32
         explicitly, which is required for cross-generation comparability.
+      ctx: Timed-region context supplied by measurement/runner.py, which scopes
+        power measurement to the measured batches. A monitor-less one is created
+        for a standalone CLI run.
 
     Returns:
       dict with runtime_seconds, work_hash, the loss sequence and the metadata
       needed to prove two runs did the same work.
     """
     torch_device = torch.device(device)
+    # A monitor-less context for standalone CLI runs; the runner passes its own.
+    ctx = ctx or RunContext()
     precision_record, _ = set_precision(precision, device)
 
     indices = _plan_indices()
@@ -146,17 +152,17 @@ def run(
     logger.info("Running %d warmup batches (not counted)", NUM_WARMUP_BATCHES)
     for _ in range(NUM_WARMUP_BATCHES):
         train_step()
-    if device.startswith("cuda"):
-        torch.cuda.synchronize(torch_device)
+    sync_device(device)
 
     logger.info("Running %d measured batches", NUM_BATCHES)
     losses = []
-    start = time.perf_counter()
-    for _ in range(NUM_BATCHES):
-        losses.append(train_step())
-    if device.startswith("cuda"):
-        torch.cuda.synchronize(torch_device)
-    runtime_seconds = time.perf_counter() - start
+    # ctx.timed_region syncs at both boundaries and marks them on the power
+    # monitor, so energy covers exactly the measured batches and not the warmup
+    # above or the CIFAR-10 setup before it.
+    with ctx.timed_region(device):
+        for _ in range(NUM_BATCHES):
+            losses.append(train_step())
+    runtime_seconds = ctx.region_runtime_s
 
     # Covers the inputs and the shape of the work. See the module docstring for
     # why the trained weights are deliberately not hashed.
