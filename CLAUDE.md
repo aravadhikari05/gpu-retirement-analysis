@@ -11,7 +11,10 @@ what another document already owns.
 - `README.md` is the authoritative project structure and flow. Do not copy the
   tree into this file or into task docs; one copy, three pointers.
 - `docs/phases.md` is the authoritative phase numbering, 1 through 10.
-- `docs/tasks/*.md` own per-workload specs.
+- `docs/tasks/*.md` own per-workload specs and per-phase scoping.
+  `phase3-workload-sizing.md` owns sweep sizing;
+  `phase8-break-even-inputs.md` owns what the carbon model needs and what is
+  not being measured for it.
 - `paper/methods-notes.md` owns measured facts destined for the paper. Put them
   there, not only into task docs.
 - `docs/claudeback-original.md` is a superseded spec draft, kept for history.
@@ -438,13 +441,34 @@ approx 0.390, ERCOT approx 0.400, PJM approx 0.550.
 
 ## Break-even model
 
-Planned. `analysis/` is empty; these are targets, not code.
+`analysis/summarize_runs.py` exists and prepares the input table.
+`analysis/carbon_model.py` does not exist yet.
 
-Core inequality: replacement is worthwhile when
+Core inequality as originally written:
 `embodied_new < (energy_per_job_old - energy_per_job_new) * expected_jobs * grid_intensity`.
 
 Planned entry points in `analysis/carbon_model.py`: `break_even_jobs`,
 `break_even_hours_per_year`, `payback_curve`.
+
+**Do not implement this inequality as written without reading
+`docs/tasks/phase8-break-even-inputs.md` first.** It walks the equation term by
+term and finds six gaps, one of which changes what the sweep must record:
+**idle power is not measured anywhere.** Every benchmark records energy inside
+the timed region, while the project premise is that a card which sits idle most
+of the time never pays back a replacement. A 1080 Ti was observed drawing
+55.03 W idle. Adding idle sampling before the sweep is a few lines; adding it
+after is a 12 to 15 GPU-hour re-run.
+
+The other five, summarised: the measurement boundary is the GPU board and
+excludes the host CPU feeding it; PUE is absent though we rejected CodeCarbon
+for hiding exactly that; the equation is a single-year snapshot while Phase 9
+wants declining grid intensity over time; the replacement unit may be a GPU or a
+whole node and vendor carbon reports are whole-system; and an NRP-specific
+recommendation needs real utilisation data the census does not contain.
+
+Units, written down once, since dropping the conversion is wrong by 3.6 million
+while still looking plausible:
+`carbon_saved_kg = (delta_energy_j * jobs / 3.6e6) * grid_intensity`.
 
 ## Related work
 
@@ -467,15 +491,22 @@ above and are not repeated here.
 - pynvml requires paired `nvmlInit()` and `nvmlShutdown()`.
 - Old consumer GPUs may quantise power readings in coarse steps, for example
   25 W. Log the observed granularity per GPU model and report it.
+  Measured 2026-08-18: this does **not** affect the GTX 1080 Ti, which reports
+  at 0.001 W with 130 distinct values across 132 samples. It remains an open
+  risk on the older cards (TITAN Xp, Quadro M4000, GTX 1080), so
+  `measurement/preflight.py` reports `min_observed_step_w` per model. Run it on
+  a card before trusting small energy differences from that card.
 - CIFAR-10 and model weights must be pre-staged or cached on the PVC. A download
   inside a timed region invalidates the run.
+- Run `measurement/preflight.py` on each GPU model before its first measured
+  run. It has already falsified two documented assumptions.
 
 ## Implementation order
 
 From the original spec draft, kept as written. It describes intended build
 order. The state table below is the authority on what is actually done, and the
-two disagree: `power_monitor.py` at step 2 and `runner.py` at step 4 are both
-still stubs, while `llm_inference.py` at step 7 is complete and measured.
+two have never matched: steps 1 to 4, 6 and 7 are written, step 5 is the one
+still blocking, and the workloads were built in the reverse of this order.
 
 1. `k8s/inventory.sh`, verify you can query the cluster and see GPU models
 2. `measurement/power_monitor.py`, test pynvml works in a basic pod
@@ -495,11 +526,14 @@ Verified against the repo on 2026-08-18. Phase numbers follow `docs/phases.md`.
 | Phase | Status | Evidence |
 |---|---|---|
 | 1 Census | Done | `data/processed/census_fleet.csv`, `census_nodes.csv`, `k8s/inventory.sh`, `k8s/summarize_census.py`. Task doc is `docs/tasks/phase0-census.md`; the filename says phase0 but the work is Phase 1. |
-| 2 Container | Reverted to cu121, unbuilt | `Dockerfile` back to `nvidia/cuda:12.1.0-runtime-ubuntu22.04` with pinned `torch==2.5.1` / `torchvision==0.20.1`, installing from `requirements.txt`, copying both packages. **Not yet built or pulled.** |
-| 3 Workloads | Written, 1 of 3 measured | All three emit `work_hash` and set TF32 explicitly. LLM measured, `data/raw/llm_smoke/`, 7 runs across 3 GPU models. ResNet and matmul have never run on a GPU. |
-| 4 Power | Written, unmeasured | `measurement/power_monitor.py` and `measurement/runner.py` implemented. Integral unit-tested against synthetic samples. **No GPU has been sampled yet.** |
-| 5 Storage | Ad hoc | Three PVC yamls: `results-pvc.yaml`, `k8s/sample_pvc.yaml`, `k8s/aidan-llm-models-pvc.yaml`. No canonical one, and `matmul-results` lacks the required `aidan` prefix. |
-| 6 to 10 | Not started | `analysis/` is `.gitkeep` only. |
+| 2 Container | **Done, verified on hardware** | `nvidia/cuda:12.1.0-runtime-ubuntu22.04`, pinned `torch==2.5.1` / `torchvision==0.20.1`, installs from `requirements.txt`, copies both packages. Built and pulled on a 1080 Ti 2026-08-18. Open: which registry is authoritative, see below. |
+| 3 Workloads | Written, 1 of 3 measured | All three emit `work_hash` and set TF32 explicitly, and all three emit `config_id`. LLM measured, `data/raw/llm_smoke/`, 7 runs across 3 GPU models. ResNet and matmul have never run on a GPU. |
+| 4 Power | Verified standalone, never attached | `power_monitor.py` and `runner.py` implemented. NVML, the energy counter and power sampling all verified on a 1080 Ti via preflight. **Never yet run wrapped around an actual benchmark**, so no `energy_j` exists for any workload. |
+| 5 Storage | **Not done, blocking** | `k8s/benchmark-pod.yaml` is a stub, so nothing is schedulable. Three unrelated PVC yamls exist, no canonical one. |
+| 6 Sweep | Not started | Blocked on Phase 5 and on the idle-power decision in `docs/tasks/phase8-break-even-inputs.md`. |
+| 7 Embodied carbon | Not started | Every figure is an unsourced placeholder. Blocks Phase 8. |
+| 8 Carbon model | Scoped, not built | `analysis/summarize_runs.py` prepares the input table. `carbon_model.py` does not exist; its required inputs are reviewed in `docs/tasks/phase8-break-even-inputs.md`. |
+| 9 to 10 | Not started | `paper/methods-notes.md` already holds real measured content. |
 
 GPU workloads are no longer restricted. The earlier "read-only census, do not
 launch GPU workloads" rule is withdrawn; workloads ran on 2026-08-11.
