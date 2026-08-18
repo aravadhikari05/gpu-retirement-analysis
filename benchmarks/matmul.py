@@ -161,10 +161,18 @@ def run(
 
     record = {
         "workload": "matmul",
+        # config_id states what was asked for; work_hash proves it happened.
+        # Format follows benchmarks/llm_inference.py so the three workloads are
+        # groupable by the same column in analysis.
+        "config_id": f"matmul|n{n}|{precision}|i{iters}|s{SEED}",
         "runtime_seconds": runtime_seconds,
         "work_hash": work_hash,
         "work_hash_covers": "inputs and work shape, not the product",
         "result_checksum": result_checksum,
+        # The loop inside the timed region. Energy per unit of work is
+        # energy_j / inner_iters. Distinct from the runner's --repeats, which is
+        # the outer loop for statistical spread.
+        "inner_iters": iters,
         "n": n,
         "iters": iters,
         "warmup_iters": warmup,

@@ -182,9 +182,17 @@ def run(
 
     return {
         "workload": "resnet_train",
+        # config_id states what was asked for; work_hash proves it happened.
+        # Format follows benchmarks/llm_inference.py so the three workloads are
+        # groupable by the same column in analysis.
+        "config_id": f"resnet50|cifar10|{precision}|b{BATCH_SIZE}|n{NUM_BATCHES}|s{SEED}",
         "runtime_seconds": runtime_seconds,
         "work_hash": work_hash,
         "work_hash_covers": "seed, dataset indices and workload shape, not trained weights",
+        # The loop inside the timed region. Energy per batch is
+        # energy_j / inner_iters. Distinct from the runner's --repeats, which is
+        # the outer loop for statistical spread.
+        "inner_iters": NUM_BATCHES,
         "batches_completed": NUM_BATCHES,
         "warmup_batches": NUM_WARMUP_BATCHES,
         "batch_size": BATCH_SIZE,

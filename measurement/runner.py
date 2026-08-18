@@ -4,26 +4,37 @@ This is the container entrypoint. Benchmarks return a dict and touch no files;
 this module wraps the timed region with measurement/power_monitor.py and writes
 the results.
 
-Durability. Each repetition is written to the PVC as it completes, not batched
-to the end. That replaces the old "keep runs under 5 minutes" rule, which
-conflicted with the chosen sweep design: the oldest cards run roughly 300 s of
-timed region plus equal warmup, and the sizing sweep runs as one pod looping
-over all points because the 7.71 GB image pull dominates otherwise. A
-preemption now costs one repetition rather than the whole pod.
-
 Output layout under --out-dir:
 
-  results.csv                              appended, one row per repetition
-  <benchmark>/<run_id>.json                full record including workload fields
+  runs.jsonl                               appended, one line per repetition
   <benchmark>/<run_id>_power.csv           the power sample trace
 
-PROVISIONAL SCHEMA. The shared CSV column set below is not yet agreed with Veda
-and Aidan. It carries run identity, energy, runtime and the runtime provenance
-CLAUDE.md requires (GPU model, node name and driver version read from inside
-the pod, never joined against a stored census). Workload-specific fields go to
-the JSON sidecar rather than widening the CSV, which also keeps the existing
-data/raw/llm_smoke/*.json shape usable. Settle the columns before the Phase 6
-sweep, not during it.
+Raw JSONL, not CSV. The three workloads have different natural fields
+(n and iters against batches against max_new_tokens), which in a single CSV goes
+either sparse or needs a sidecar that every analysis query then has to join
+back. JSONL holds them inline, and lists such as the per-batch loss sequence
+work without inventing a third file. This follows the repo convention that
+data/raw/ holds raw telemetry and data/processed/ holds derived summary tables:
+analysis/summarize_runs.py turns this into the Phase 8 CSV. A column nobody
+thought of is then a re-derive rather than a re-run of the sweep.
+
+Two loops, deliberately named apart. `repeat_index` is the outer loop, this
+module's --repeats, which exists for statistical spread. `inner_iters` is the
+workload's own loop inside the timed region, which exists to clear the 30 s
+floor. Energy per unit of work is energy_j / inner_iters, so conflating them
+silently scales every energy figure by the wrong factor.
+
+Grain is one row per repetition, because that is both the unit of exclusion
+(a run below the floor, or one that crashed) and the unit of independence for
+a standard deviation. Anything finer lives inline as a list, or beside it in
+the power trace.
+
+Durability. Each repetition is written as it completes, not batched to the end.
+That replaces the old "keep runs under 5 minutes" rule, which conflicted with
+the chosen sweep design: the oldest cards run roughly 300 s of timed region plus
+equal warmup, and the sizing sweep runs as one pod looping over all points
+because the 7.71 GB image pull dominates otherwise. A preemption now costs one
+repetition rather than the whole pod.
 """
 
 import argparse
@@ -44,43 +55,30 @@ BENCHMARKS = {
     "matmul": "benchmarks.matmul",
 }
 
-CSV_FIELDS = [
-    "run_utc",
-    "run_id",
-    "benchmark",
-    "repeat_index",
-    "gpu_model_observed",
-    "node_name",
-    "driver_version",
-    "hardware_source",
-    "runtime_s",
-    "energy_j",
-    "energy_j_counter",
-    "avg_power_w",
-    "peak_power_w",
-    "min_power_w",
-    "n_power_samples",
-    "n_failed_power_samples",
-    "power_duration_s",
-    "below_30s_floor",
-    "work_hash",
-    "exclusion_reason",
-]
-
 
 def _observed_hardware() -> dict:
-    """Reads GPU model, driver and node name from inside the pod.
+    """Reads GPU identity, driver and node name from inside the pod.
 
     The census is a point-in-time snapshot and node labelling drifts, so what a
     run actually used has to be observed at runtime rather than joined against a
     stored table. NVML is tried first and nvidia-smi is the fallback; which one
     answered is recorded rather than left implicit.
+
+    gpu_uuid is not decoration. It is the only way to tell five repetitions on
+    one physical card from five repetitions across five cards, and CLAUDE.md
+    names that distinction as an open question: both L4 runs on 2026-08-11 used
+    GPU-e82f7d3b, which is knowable only because llm_inference.py recorded it.
+    Without this field a standard deviation over repetitions silently overstates
+    how much of the fleet was sampled.
     """
     fields = {
         "gpu_model_observed": "",
+        "gpu_uuid": "",
         "driver_version": "",
         "hardware_source": "",
         "node_name": os.environ.get("NODE_NAME", ""),
+        "image_ref": os.environ.get("IMAGE_REF", ""),
+        "git_commit": os.environ.get("GIT_COMMIT", ""),
     }
     try:
         import pynvml
@@ -88,6 +86,8 @@ def _observed_hardware() -> dict:
         pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         name = pynvml.nvmlDeviceGetName(handle)
+        uuid = pynvml.nvmlDeviceGetUUID(handle)
+        fields["gpu_uuid"] = uuid.decode() if isinstance(uuid, bytes) else uuid
         # nvmlSystemGetDriverVersion, not nvmlDeviceGetDriverVersion. The latter
         # does not exist; calling it raises AttributeError, which this function
         # catches, so the only symptom was hardware_source silently reading
@@ -154,18 +154,15 @@ def _write_power_trace(path: str, readings: list[dict]) -> None:
         writer.writerows(readings)
 
 
-def _append_csv_row(path: str, row: dict) -> None:
-    """Appends one row, writing the header if the file is new.
+def _append_jsonl(path: str, record: dict) -> None:
+    """Appends one repetition as a single JSON line.
 
-    Flushed and fsynced so a preemption between repetitions cannot lose the row
-    that was just reported as complete.
+    Flushed and fsynced so a preemption between repetitions cannot lose the
+    record that was just reported as complete. Append-only: never rewrite an
+    earlier line, so a partially written sweep is still valid data.
     """
-    write_header = not os.path.exists(path)
-    with open(path, "a", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS, extrasaction="ignore")
-        if write_header:
-            writer.writeheader()
-        writer.writerow(row)
+    with open(path, "a") as handle:
+        handle.write(json.dumps(record, sort_keys=True, default=str) + "\n")
         handle.flush()
         os.fsync(handle.fileno())
 
@@ -211,17 +208,31 @@ def run_once(
 
     power_fields = power.as_dict() if power is not None else {}
 
+    # Run identity and provenance first, then the benchmark's own fields. The
+    # benchmark cannot overwrite provenance, and workload-specific keys sit
+    # inline rather than in a sidecar that analysis would have to join back.
     row = {
         "run_utc": run_utc,
         "run_id": run_id,
         "benchmark": benchmark,
         "repeat_index": repeat_index,
+        "config_id": record.get("config_id", ""),
+        "inner_iters": record.get("inner_iters", ""),
         "runtime_s": record.get("runtime_seconds", ""),
         "work_hash": record.get("work_hash", ""),
         "exclusion_reason": "",
-        **hardware,
         **power_fields,
+        **{k: v for k, v in record.items() if k not in ("runtime_seconds",)},
+        **hardware,
     }
+
+    if not row["config_id"]:
+        # Without it, analysis can only group by workload name, which would
+        # average 32-token and 960-token runs into one meaningless number.
+        logger.warning(
+            "%s returned no config_id. Runs cannot be grouped by configuration.",
+            benchmark,
+        )
 
     # A run below the floor is kept with an explicit exclusion reason rather
     # than deleted, per the repo convention. A crashed run is kept the same way.
@@ -236,16 +247,13 @@ def run_once(
     bench_dir = os.path.join(out_dir, benchmark)
     os.makedirs(bench_dir, exist_ok=True)
 
-    full = {**record, **row}
-    with open(os.path.join(bench_dir, f"{run_id}.json"), "w") as handle:
-        json.dump(full, handle, indent=2, sort_keys=True, default=str)
-
     if power is not None and power.readings:
-        _write_power_trace(
-            os.path.join(bench_dir, f"{run_id}_power.csv"), power.readings
-        )
+        trace_path = os.path.join(bench_dir, f"{run_id}_power.csv")
+        _write_power_trace(trace_path, power.readings)
+        # Recorded so the trace can be found from the row without guessing.
+        row["power_trace_path"] = os.path.relpath(trace_path, out_dir)
 
-    _append_csv_row(os.path.join(out_dir, "results.csv"), row)
+    _append_jsonl(os.path.join(out_dir, "runs.jsonl"), row)
 
     logger.info(
         "%s repeat %d: runtime=%.4fs energy=%.1fJ avg=%.1fW samples=%d%s",

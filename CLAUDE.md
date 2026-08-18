@@ -43,7 +43,11 @@ what another document already owns.
 - kubectl context: `nautilus`, namespace: `cmpm118` (shared with other students)
 - Requires UCSC VPN
 - User-level access only. No admin, no node access, no scheduler changes.
-- Prefix every Kubernetes resource name with `aidan`
+- Prefix every Kubernetes resource name with **your own name**: `aidan-`,
+  `arav-`, `veda-`. `cmpm118` is shared with students outside this project, so
+  the prefix is what keeps one person's cleanup from deleting another's run.
+  This rule previously said to prefix everything with `aidan`, which was written
+  when he was the only person deploying.
 - Registry: `gitlab-registry.nrp-nautilus.io/aidan/aidan`, built by GitLab CI
   on the `gitlab` remote. GitHub Actions does not build the pod image.
 - Fleet reachability matters as much as fleet size. As of the 20260804 census,
@@ -352,27 +356,67 @@ Run duration decisions:
 
 ## Output contract
 
-`measurement/runner.py` owns all result writes. Benchmarks return a dict and
-touch no files. `resnet_train.py` already works this way and is the model to
-follow; `matmul_benchmark.py` writes its own CSV and needs changing.
+Settled 2026-08-18. `measurement/runner.py` owns all result writes. Benchmarks
+return a dict and touch no files.
 
-This resolves a three-way conflict. The spec draft had `runner.py` own the file
-and write energy at write time; `matmul_benchmark.py` writes its own CSV with
-`energy_j` blank for Phase 4 to fill later, under a header comment calling it a
-"SHARED CONTRACT with Arav/Aidan" that was never agreed to; `llm_inference.py`
-emits JSON instead. Either the benchmark owns the file or the runner does, and
-it is the runner.
+**Raw JSONL, derived CSV.** `runner.py` appends one JSON line per repetition to
+`runs.jsonl`; `analysis/summarize_runs.py` derives
+`data/processed/runs_flat.csv` and `data/processed/energy_by_gpu.csv`. This is
+the existing convention (`data/raw/` is raw telemetry, `data/processed/` is
+committed summary tables) applied to benchmark output. A single CSV cannot hold
+three workloads with different natural fields without going sparse or needing a
+sidecar that every query then joins back, and JSONL carries lists such as the
+per-batch loss sequence inline. The practical payoff: a column nobody thought of
+is a re-derive, not a 12-hour re-run of the sweep.
 
-Still open, and needs Veda and Aidan rather than a unilateral decision: the
-exact column set. One wide CSV goes sparse across workloads with different
-natural fields (`n`/`iters`/`total_flops` against
-`batches`/`batch_size`/`final_loss` against
-`work_hash`/`model_revision`/`max_new_tokens`). The likely shape is a shared CSV
-carrying run identity, energy, runtime and provenance, plus a per-workload JSON
-sidecar, which also preserves the existing `data/raw/llm_smoke/*.json` format
-rather than forcing a re-run. Whatever is chosen must satisfy the runtime
-provenance rule above: GPU model, node name and driver version observed from
-inside the pod. The `matmul_benchmark.py` schema currently cannot.
+**Grain is one row per repetition.** That is both the unit of exclusion (below
+the floor, or crashed) and the unit of independence for a standard deviation.
+Anything finer lives inline as a list, or beside the row in the power trace CSV.
+
+**Two loops, named apart.** `repeat_index` is the runner's `--repeats`, the
+outer loop for statistical spread. `inner_iters` is the workload's own loop
+inside the timed region, which exists to clear the 30 s floor. Energy per unit
+of work is `energy_j / inner_iters`. Conflating them scales every energy figure
+by the wrong factor, silently.
+
+**`config_id` states what was asked for; `work_hash` proves it happened.**
+Aidan's format, now used by all three workloads:
+`gpt2-xl|15ea56dee5df|fp32|b1|n960|p72ef35ff2d6d`. Grouping by workload name
+alone would average 32-token and 960-token runs into one meaningless figure.
+
+### How the column set was chosen
+
+Not by listing available fields. By writing the Phase 8 aggregation first and
+asking what wrong answer the schema still permits. Each wrong answer implies one
+column, and you stop when you cannot invent a new one.
+
+| Wrong answer it would otherwise permit | Column |
+|---|---|
+| Average fp32 and tf32 runs together | `precision`, `allow_tf32_matmul` |
+| Average 32-token and 960-token runs | `config_id` |
+| Include a sub-30 s or crashed run | `exclusion_reason`, `below_30s_floor` |
+| Average runs that did different work | `work_hash` |
+| Report n=5 for a model measured on one card | `gpu_uuid` |
+| Compare runs built from different images | `image_ref`, `git_commit` |
+
+`gpu_uuid` earns its place from evidence: the two L4 runs on 2026-08-11 both
+used `GPU-e82f7d3b`, and the 1080 Ti runs used two different physical cards.
+Neither is knowable without it, and "agreement between two cards of the same
+model" is a named open question in this file.
+
+Derived quantities are not stored. `gflops_per_s` follows from `total_flops` and
+`runtime_s`; store inputs and compute outputs in the summary step.
+
+`summarize_runs.py` enforces the validity rules rather than leaving them to
+whoever writes the notebook: excluded rows never enter an aggregate, a group
+whose rows disagree on `work_hash` is **refused rather than averaged**, and
+`n_physical_gpus` is reported next to `n_runs` so a standard deviation from one
+card is not read as fleet variation.
+
+Still open for Veda and Aidan: whether `llm_inference.py` should adopt
+`inner_iters` when the repetition-inside-the-timed-region change from
+`docs/tasks/phase3-workload-sizing.md` is implemented. It currently runs one
+`generate()` per timed region, so it reports no `inner_iters` at all.
 
 ## Embodied carbon and grid intensity
 
