@@ -634,13 +634,6 @@ existing assignments, not fixed. Before starting any item, check `git log` and
 live Nautilus pod and PVC state, per the hard rule about stubs and teammates'
 in-progress work.
 
-### 0. Merge the timed-region branch (Arav)
-
-Branch `timed-region-energy-window` holds the energy-window fix (two commits),
-CPU-verified only, pushed nowhere yet. It changes the benchmark call contract
-(`run(..., ctx=)`), so any teammate editing a workload needs it merged first.
-Decide whether it lands on `main` before or after the first GPU run.
-
 ### 1. Phase 5, k8s storage (CRITICAL, blocks everything below)
 
 `k8s/benchmark-pod.yaml` is a one-line stub, so nothing is schedulable. A
