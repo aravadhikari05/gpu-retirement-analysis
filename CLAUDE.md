@@ -66,19 +66,20 @@ what another document already owns.
 - `if __name__ == "__main__":` in every script.
 - `logging`, not print, except for deliberate CLI output.
 
-`benchmarks/resnet_train.py` conforms and is the reference example. It also
-shows the right shape for a benchmark: it returns a dict and writes no files.
-`matmul_benchmark.py` does not conform (no type hints, no function docstrings,
-prints rather than logs, writes its own CSV).
+`benchmarks/resnet_train.py` is the reference example. It also shows the right
+shape for a benchmark: it returns a dict and writes no files.
 
-These are the target, not the current state. Checked 2026-08-17: `ruff check .`
-passes, but there is no `pyproject.toml` or `ruff.toml`, so it runs on ruff
-defaults (E4, E7, E9, F) and enforces none of the type hint, docstring or
-naming rules above. `ruff format --check .` reports 4 files needing formatting:
-`llm_inference.py`, `summarize_census.py`, `matmul_benchmark.py`,
-`power_monitor.py`. Three of those belong to teammates, so reformatting them is
-a coordinated change, not a drive-by. Adding a ruff config that actually
-enforces these conventions is unclaimed work.
+Enforcement is weaker than it looks. Checked 2026-08-18: `ruff check` passes on
+`benchmarks/` and `measurement/`, but there is no `pyproject.toml` or
+`ruff.toml`, so it runs on ruff defaults (E4, E7, E9, F) and enforces none of
+the type hint, docstring or naming rules above. Adding a ruff config that
+actually checks them is unclaimed work.
+
+`ruff format --check` is clean across `benchmarks/` and `measurement/` except
+`llm_inference.py`, which is left unformatted deliberately: its output is
+already committed under `data/raw/llm_smoke/` and reformatting it is a
+coordinated change, not a drive-by. `k8s/summarize_census.py` is also
+unformatted.
 
 ## Data conventions
 
@@ -123,9 +124,25 @@ LLM-specific. Every workload obeys them.
 7. A `work_hash`: a SHA-256 over the workload output, proving two runs did the
    same work. Compare within a precision mode, not across.
 
-Requirement 7 currently exists only in `llm_inference.py`. Neither
-`resnet_train.py` nor `matmul_benchmark.py` emits one, and both need an
-equivalent before their results are usable.
+All three workloads emit a `work_hash` as of 2026-08-18, but they do not all
+prove the same thing, and the difference matters.
+
+`llm_inference.py` hashes the generated token IDs, so it proves the output was
+bit-identical. That works because greedy decoding is an argmax and the
+per-token result either matches exactly or diverges visibly.
+
+`resnet_train.py` and `matmul.py` hash the **inputs and the shape of the work**
+(seed, dataset indices or input matrices, iteration counts, precision), not the
+result. Training and repeated matmul are long chains of float reductions, and
+floating point addition is not associative, so results are not bit-identical
+across architectures and hashing them would fail for reasons unrelated to
+whether the same work was done. Given identical inputs and a fixed iteration
+count, the FLOP count and operation sequence are identical on every card, which
+is the fixed-work premise the project needs. Both record a result checksum or
+loss sequence alongside for divergence diagnosis, never asserted equal.
+
+State that distinction in the methods section. A reviewer will otherwise read
+one `work_hash` column and assume all three carry the LLM's guarantee.
 
 The LLM workload's own parameters (model, revision, token counts, prompt) live
 in `docs/tasks/phase3-llm-inference.md`, not here. The 500-token gpt2
@@ -135,10 +152,10 @@ finding below rules out the old one independently.
 
 ## Measurement contract
 
-`measurement/power_monitor.py` is still a stub. This is the agreed interface,
-reconciled from the spec draft and the working implementation at
-`power_monitor.py`. Naming follows the working code; the spec draft's longer
-names (`total_energy_joules`, `avg_power_watts`) are not used.
+Implemented 2026-08-18 in `measurement/power_monitor.py`, reconciled from the
+spec draft and Veda's working implementation. Naming follows the working code;
+the spec draft's longer names (`total_energy_joules`, `avg_power_watts`) are not
+used.
 
 `PowerMonitor(device_index=0, interval=0.2)`, interval in seconds.
 `start()` begins a daemon sampling thread, `stop()` returns a `PowerResult`.
@@ -157,8 +174,15 @@ names (`total_energy_joules`, `avg_power_watts`) are not used.
   impossible to write. The trace is also the only way to detect the cached
   reading problem (Yang et al., 2024) after the fact.
 - If `nvmlDeviceGetPowerUsage` raises, log a warning and skip that sample. Do
-  not let the thread die. A benchmark that loses its power thread mid-run
-  currently reports success with a truncated trace.
+  not let the thread die. A benchmark that loses its power thread mid-run would
+  otherwise report success on a truncated trace. The skipped count is recorded
+  as `n_failed_power_samples`.
+
+**Unverified.** No measured run has exercised the power monitor yet. The
+integral is unit-tested against synthetic samples, but nothing has confirmed on
+this cluster that `nvidia-ml-py` resolves
+`nvmlDeviceGetTotalEnergyConsumption`, nor that NVML reports sane wattage on
+each card. Do that before trusting any `energy_j` figure.
 
 ## Library version traps
 
@@ -381,38 +405,48 @@ still stubs, while `llm_inference.py` at step 7 is complete and measured.
 
 ## Current state
 
-Verified against the repo on 2026-08-17. Phase numbers follow `docs/phases.md`.
+Verified against the repo on 2026-08-18. Phase numbers follow `docs/phases.md`.
 
 | Phase | Status | Evidence |
 |---|---|---|
 | 1 Census | Done | `data/processed/census_fleet.csv`, `census_nodes.csv`, `k8s/inventory.sh`, `k8s/summarize_census.py`. Task doc is `docs/tasks/phase0-census.md`; the filename says phase0 but the work is Phase 1. |
-| 2 Container | Built, contents wrong | `Dockerfile` at `4ec4b70` copies only `matmul_benchmark.py` and `power_monitor.py`. ResNet and LLM benchmarks are not in the image and `transformers` is not installed. |
-| 3 Workloads | 1 of 3 measured | LLM done, `data/raw/llm_smoke/`, 7 runs across 3 GPU models. ResNet script written, never run. Matmul script written, orphaned at repo root. |
-| 4 Power | Written, unwired | Real `power_monitor.py` at repo root. `measurement/power_monitor.py` and `measurement/runner.py` are one-line stubs. Nothing imports the real one. |
-| 5 Storage | Ad hoc | Three PVC yamls: `results-pvc.yaml`, `k8s/sample_pvc.yaml`, `k8s/aidan-llm-models-pvc.yaml`. No canonical one. |
+| 2 Container | Reverted to cu121, unbuilt | `Dockerfile` back to `nvidia/cuda:12.1.0-runtime-ubuntu22.04` with pinned `torch==2.5.1` / `torchvision==0.20.1`, installing from `requirements.txt`, copying both packages. **Not yet built or pulled.** |
+| 3 Workloads | Written, 1 of 3 measured | All three emit `work_hash` and set TF32 explicitly. LLM measured, `data/raw/llm_smoke/`, 7 runs across 3 GPU models. ResNet and matmul have never run on a GPU. |
+| 4 Power | Written, unmeasured | `measurement/power_monitor.py` and `measurement/runner.py` implemented. Integral unit-tested against synthetic samples. **No GPU has been sampled yet.** |
+| 5 Storage | Ad hoc | Three PVC yamls: `results-pvc.yaml`, `k8s/sample_pvc.yaml`, `k8s/aidan-llm-models-pvc.yaml`. No canonical one, and `matmul-results` lacks the required `aidan` prefix. |
 | 6 to 10 | Not started | `analysis/` is `.gitkeep` only. |
 
 GPU workloads are no longer restricted. The earlier "read-only census, do not
 launch GPU workloads" rule is withdrawn; workloads ran on 2026-08-11.
 
-Two blockers stop any benchmark from running with power measurement attached:
-the ResNet and LLM benchmarks are not in the container image, and
-`measurement/runner.py` does not exist.
+The root duplicates are resolved: `matmul_benchmark.py` and `power_monitor.py`
+moved into `benchmarks/matmul.py` and `measurement/power_monitor.py`, and the
+root copies deleted.
 
-Duplicated files needing resolution, not yet resolved: `power_monitor.py`
-against `measurement/power_monitor.py`, and `matmul_benchmark.py` against
-`benchmarks/matmul.py`. In both cases the root file is real and the package path
-is a stub.
+### What is still unverified
 
-### Pending, decided but not implemented
+Nothing in Phase 2, 3 or 4 above has run on hardware since the 2026-08-18
+changes. Specifically not yet done, and not to be described as working until it
+is:
 
-The Dockerfile reverts to the pre-2026-08-13 form: base
-`nvidia/cuda:12.1.0-runtime-ubuntu22.04`, the cu121 index URL, and
-`COPY benchmarks/ measurement/`, with Veda's `nvidia-ml-py` added on top and
-`transformers` installed from `requirements.txt` so the pin reaches the image.
-That change also needs Veda's two root files moved into the package paths, and a
-real `measurement/runner.py`, since the old entrypoint
-`python3 -m measurement.runner` currently points at a stub. It is held until
-Veda is consulted, because it reverts her committed work. Her own runs are
-unaffected either way: `test-pod.yaml` pulls
-`docker.io/vedajanga/matmul-bench:latest`, not the repo image.
+- The image has not been built. The Dockerfile is a revert to a form that built
+  before, plus pinned versions and a `requirements.txt` install, so it is
+  plausible rather than proven.
+- No GPU has been sampled. `energy_j`, `energy_j_counter` and every power column
+  are untested against real hardware.
+- `nvidia-ml-py` has not been confirmed to resolve
+  `nvmlDeviceGetTotalEnergyConsumption` on this cluster.
+- `resnet_train.py` and `matmul.py` have never run on a GPU at all. They have
+  only been syntax and lint checked.
+- The 1080 Ti has not been re-checked against the pinned wheels. `sm_61` support
+  is the reason for the cu121 pin and is the thing most worth confirming first.
+
+### Next: k8s plumbing, which is not done
+
+`k8s/benchmark-pod.yaml` is still a one-line stub, so nothing can be scheduled
+yet. A working pod spec needs two PVCs mounted, not one: results, plus the
+pre-staged model cache for the LLM workload
+(`k8s/aidan-llm-models-pvc.yaml`, staged by `aidan-llm-prep-job.yaml`). ResNet
+separately needs `/results/data/cifar10` writable, since it downloads CIFAR-10
+during setup. It should also set `NODE_NAME` from the downward API, which is
+where `runner.py` reads the node name from.

@@ -6,12 +6,22 @@
 #
 # 5.15.0 is the version that produced the verified work_hash
 # 65ec51f4... across the GTX 1080 Ti and L4 on 2026-08-11.
-#
-# WARNING: the Dockerfile does not install from this file. It runs
-#   pip install transformers pynvml pandas
-# directly, so pinning here does not yet affect the built image. Closing that
-# gap needs a Dockerfile change, which is Arav's call.
 transformers==5.15.0
 
-s3cmd
+# NVML bindings for measurement/power_monitor.py.
+#
+# EXACTLY ONE NVML PACKAGE. Do not also add `pynvml`. Both projects install a
+# module named `pynvml`, they disagree on some symbols when both are present,
+# and torch warns about the clash on import. The pre-2026-08-13 Dockerfile
+# installed `pynvml` and Veda's replacement installed `nvidia-ml-py`; merging
+# them naively would have installed both. nvidia-ml-py is NVIDIA's own package,
+# so that is the one kept.
+#
+# UNVERIFIED: no measured run has exercised the power monitor yet, so the claim
+# that nvidia-ml-py resolves nvmlDeviceGetTotalEnergyConsumption is from the
+# package's documented API, not from this cluster. Confirm in a pod before
+# trusting energy_j_counter.
+nvidia-ml-py
+
 pandas
+s3cmd
