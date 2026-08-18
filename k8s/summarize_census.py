@@ -214,6 +214,12 @@ def build_fleet(gpu_rows, unlabeled_names):
             "openly_schedulable_with_gpu": openly_gpu,
             "tainted_but_ready": sum(1 for r in members if r["tainted_but_ready"]),
             "allocatable_gpu_sum": sum(r["allocatable_gpu"] for r in members),
+            # Reachable capacity: allocatable GPUs on openly schedulable nodes
+            # only. allocatable_gpu_sum spans reserved and tainted nodes too and
+            # overstates what cmpm118 can actually get.
+            "allocatable_gpu_sum_swg": sum(
+                r["allocatable_gpu"] for r in members if r["schedulable_with_gpu"]
+            ),
             "mig_allocatable_sum": sum(r["mig_allocatable"] for r in members),
             "distinct_sites": len({r["site"] for r in members if r["site"]}),
             "distinct_regions": len({r["region"] for r in members if r["region"]}),
@@ -231,7 +237,7 @@ def write_fleet_csv(fleet, snap, ts, args):
     cols = [
         "snapshot", "snapshot_ts", "product", "node_count", "ready_nodes",
         "openly_schedulable", "openly_schedulable_with_gpu",
-        "tainted_but_ready", "allocatable_gpu_sum",
+        "tainted_but_ready", "allocatable_gpu_sum", "allocatable_gpu_sum_swg",
         "mig_allocatable_sum", "distinct_sites", "distinct_regions",
         "taint_keys", "driver_versions", "measurement_viable", "coverage_risk",
     ]
@@ -248,7 +254,7 @@ def write_fleet_csv(fleet, snap, ts, args):
 def print_fleet_table(fleet):
     print("=== GPU fleet census (per model) ===")
     print("sched = ready+uncordoned+untainted;  swg = sched AND allocatable GPU > 0")
-    hdr = f"{'model':<42} {'nodes':>5} {'ready':>5} {'sched':>5} {'swg':>4} {'t+rdy':>5} {'alloc':>5} {'site':>4} {'rgn':>3} {'viable':>6} {'risk':>4}"
+    hdr = f"{'model':<42} {'nodes':>5} {'ready':>5} {'sched':>5} {'swg':>4} {'t+rdy':>5} {'alloc':>5} {'a_swg':>5} {'site':>4} {'rgn':>3} {'viable':>6} {'risk':>4}"
     print(hdr)
     print("-" * len(hdr))
     for r in fleet:
@@ -256,7 +262,8 @@ def print_fleet_table(fleet):
             f"{r['product']:<42} {r['node_count']:>5} {r['ready_nodes']:>5} "
             f"{r['openly_schedulable']:>5} {r['openly_schedulable_with_gpu']:>4} "
             f"{r['tainted_but_ready']:>5} "
-            f"{r['allocatable_gpu_sum']:>5} {r['distinct_sites']:>4} "
+            f"{r['allocatable_gpu_sum']:>5} {r['allocatable_gpu_sum_swg']:>5} "
+            f"{r['distinct_sites']:>4} "
             f"{r['distinct_regions']:>3} {str(r['measurement_viable']):>6} "
             f"{'RISK' if r['coverage_risk'] else '':>4}"
         )
