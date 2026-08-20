@@ -1,1 +1,66 @@
-#Tells kubernetes to what to run
+# Canonical benchmark pod for the GPU-retirement sweep. Owner: Veda.
+# Runs any of the three workloads (matmul | resnet_train | llm_inference) through
+# measurement/runner.py with power monitoring, writing to the results PVC.
+#
+# TEMPLATE. Substitute {{PLACEHOLDERS}} per run (envsubst or sed):
+#   {{RUN_NAME}}   unique pod name, e.g. matmul-l4-r1
+#   {{IMAGE}}      GHCR tag with timed-region code. Current: ghcr.io/aravadhikari05/gpu-retirement-analysis:latest
+#   {{GPU_MODEL}}  exact nvidia.com/gpu.product label, e.g. NVIDIA-GeForce-GTX-1080-Ti
+#   {{BENCHMARK}}  matmul | resnet_train | llm_inference
+#   {{REPEATS}}    e.g. 5
+#   {{SET_ARGS}}   workload args as YAML list items, e.g. "--set", "n=8192", "--set", "iters=500"
+#
+# Storage:
+#   /results -> results PVC (all workloads write runs.jsonl here)
+#   /models  -> Aidan's HF weight cache; HF_HOME=/models/hf matches aidan-llm-prep-job.yaml
+#   /results/data/cifar10 is writable (RWX results PVC) for resnet setup
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{RUN_NAME}}
+  namespace: cmpm118
+  labels:
+    app: gpu-retirement
+    gpu-retirement/benchmark: "{{BENCHMARK}}"
+spec:
+  restartPolicy: Never
+  containers:
+  - name: bench
+    image: {{IMAGE}}
+    args: ["--benchmark", "{{BENCHMARK}}", "--repeats", "{{REPEATS}}", {{SET_ARGS}}, "--out-dir", "/results"]
+    env:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+    - name: IMAGE_REF
+      value: "{{IMAGE}}"
+    - name: GIT_COMMIT
+      value: "{{GIT_COMMIT}}"
+    - name: HF_HOME
+      value: /models/hf
+    - name: HF_HUB_OFFLINE
+      value: "1"
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+        memory: 16Gi
+        cpu: "4"
+      requests:
+        nvidia.com/gpu: 1
+        memory: 16Gi
+        cpu: "4"
+    volumeMounts:
+    - name: results
+      mountPath: /results
+    - name: models
+      mountPath: /models
+  volumes:
+  - name: results
+    persistentVolumeClaim:
+      claimName: matmul-results
+  - name: models
+    persistentVolumeClaim:
+      claimName: aidan-llm-models-pvc
+  nodeSelector:
+    nvidia.com/gpu.product: {{GPU_MODEL}}

@@ -1,0 +1,21 @@
+# Canonical results PVC for the GPU-retirement sweep. Owner: Veda.
+# All three workloads write runs.jsonl + power traces here via --out-dir=/results.
+# Exists live as bound claim "matmul-results" (holds the validated L4 run).
+# Kept as-is: a live PVC can't be renamed without destroying its data.
+# RWX so many benchmark pods append concurrently during the sweep.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: matmul-results
+  namespace: cmpm118
+  labels:
+    app: gpu-retirement
+    veda.ucsc.edu/owner: veda
+    veda.ucsc.edu/role: canonical-results
+spec:
+  storageClassName: rook-cephfs
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
