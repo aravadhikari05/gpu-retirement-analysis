@@ -932,21 +932,39 @@ beside the mean for the same reason `n_physical_gpus` sits beside `n_runs`.
 
 ## Embodied carbon and grid intensity
 
-**All figures in this section are unsourced pending citation.** They came from a
-spec draft with no citation attached. Treat them as placeholders and source them
-individually before use, in the style `paper/methods-notes.md` used for the
-bandwidth figures. Ranges, not point values.
+**Embodied carbon is sourced as of 2026-08-23. Grid intensity is not.**
 
-Sources to work from: the ACT model (Gupta et al., 2022) for die size, process
-node and fab characteristics; vendor product carbon footprint reports (Dell, HP,
-Lenovo), which are whole-system and have to be worked backwards to a GPU
-contribution; die sizes from techpowerup and anandtech die shots.
+`data/embodied/EMBODIED.md` owns the embodied figures and their method. Do not
+copy the numbers into this file; one copy, three pointers. In summary: Veda
+estimated them with the ACT area-based method (Gupta et al., 2022), sweeping
+carbon-per-area 1.0 to 3.0 kg CO2e/cm2 over sourced die sizes, and published
+two scopes, die-only and die+gddr. `analysis/carbon_model.py` reads the
+die+gddr table by default.
 
-Expected range per GPU: 50 to 400 kg CO2e depending on generation, die size and
-memory.
+**The 50 to 400 kg placeholder this file used to carry is withdrawn.** The
+measured estimates are an order of magnitude lower, roughly 6 to 27 kg per card.
+That is mostly scope, since the old figure was probably whole-system, but not
+only scope: see the floor caveat below.
 
-Grid intensity presets, kg CO2 per kWh: CAISO approx 0.200, US national average
-approx 0.390, ERCOT approx 0.400, PJM approx 0.550.
+Three things about the new figures that change what may be claimed:
+
+- **They are a floor, not a card.** The die+gddr scope covers the die, its
+  packaging and the memory. A physically swapped card also has a PCB, VRMs, a
+  heatsink and heatpipes, a fan, shroud, backplate, connectors, assembly and
+  transport. None of that is counted, so a real card is higher.
+- **The bias direction stacks.** Understating the replacement's embodied carbon
+  makes replacement look better. So does the GPU-only scope decision, and so
+  does the note under "How NRP actually acquires hardware" that a 2017-era
+  node's CPU, RAM and PSU are aged too. Three biases, all the same way.
+- **Carbon-per-area is swept uniformly across three process nodes**, 16nm,
+  12nm and 8nm, although `EMBODIED.md` notes newer nodes trend higher. That
+  understates the newest card, which is the replacement, so it points the same
+  way as the other two. Node-differentiated CPA is open work.
+
+Grid intensity presets remain unsourced placeholders, kg CO2 per kWh: CAISO
+approx 0.200, US national average approx 0.390, ERCOT approx 0.400, PJM approx
+0.550. Because they are unsourced, every figure `carbon_model.py` produces is
+still labelled provisional even though the embodied half is now sourced.
 
 ## Break-even model
 
@@ -968,8 +986,22 @@ Three measured findings are enforced in code rather than described in prose:
 a per-job energy difference inside the 6.43% same-model variance bound sets
 `interpretable=False`; every result carries the note that the integral
 understates the saving, so thresholds are pessimistic about replacement; and an
-idle differential below 13.57 W is reported as noise, per the scatter finding in
-`paper/methods-notes.md`.
+idle differential below 13.57 W is **suppressed to zero**, per the scatter
+finding in `paper/methods-notes.md`.
+
+That last one was annotation only until 2026-08-23, and Phase 7 showed why that
+was not enough. Against the old 100 kg placeholder the idle term was a rounding
+error. Against the measured 6 to 27 kg it decides the answer: a 5.6 W
+differential repaid an entire card on its own, so the model reported payback
+before a single job while the note underneath called that same figure noise. A
+caller reads the number, not the note. Zero is the defensible central estimate,
+because flat idle across cards is what the fleet measured, so the term is now
+removed and the suppression is reported with the value it would have carried.
+
+Embodied estimates are read from `data/embodied/` via `load_embodied()`, keyed
+on a normalised model name because Phase 7 writes the hyphenated Kubernetes
+label while the energy table carries the NVML name. Joining the raw strings
+matches nothing and reads as "no pairs found" rather than as a bug.
 
 **A job is one `inner_iter`**, which is what `energy_j_per_inner_iter` holds.
 **Gap 4 is resolved in the signature**: `horizon_years=None` reproduces the

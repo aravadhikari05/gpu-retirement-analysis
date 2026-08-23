@@ -8,13 +8,18 @@ about.
 
 ## What this module will and will not claim
 
-Every embodied and grid figure in the project is currently an unsourced
-placeholder. `EmbodiedEstimate` and `GridIntensity` therefore carry a `sourced`
-flag, any False taints `BreakEven.provisional`, and the CLI refuses to print
-without `--allow-unsourced`. A number out of here is arithmetic until Phase 7
-lands, and the type system says so rather than a comment saying so.
+Embodied figures became sourced when Phase 7 landed on 2026-08-23 and are read
+from `data/embodied/`. Grid intensity is still a placeholder, so every number
+this module prints is still provisional. `EmbodiedEstimate` and `GridIntensity`
+each carry a `sourced` flag, any False taints `BreakEven.provisional`, and the
+CLI refuses to print without `--allow-unsourced`. Both halves have to be sourced
+before a figure here is quotable.
 
-Two measured results from the fleet pass are enforced rather than described:
+Sourced is not the same as complete. The published scope is die, packaging and
+memory, which is a floor on a real card rather than an estimate of it, and
+`EMBODIED_SCOPE_NOTE` rides on every result built from it.
+
+Three measured results from the fleet pass are enforced rather than described:
 
 - **Same-model variance is 6.43%** (two A4000s, 2026-08-23), against 0.30%
   within one card. A replacement pair whose per-job energy difference is inside
@@ -27,6 +32,12 @@ Two measured results from the fleet pass are enforced rather than described:
   threshold this module produces is conservative: too pessimistic about
   replacement, never too optimistic. That direction is recorded in the notes on
   every result rather than left in prose.
+- **Idle draw is equal across the fleet within measurement scatter**, so an
+  idle differential inside `IDLE_WITHIN_CARD_SPREAD_W` is suppressed to zero.
+  Annotating it was not enough once Phase 7 replaced the 100 kg placeholder
+  with real 6 to 27 kg estimates: at that scale a noise-level differential
+  repaid a whole card by itself, and the model reported payback before a single
+  job while calling the same figure noise one line below.
 
 ## Why the snapshot form cannot carry the idle term
 
@@ -109,6 +120,37 @@ IDLE_WITHIN_CARD_SPREAD_W = 13.57
 
 DEFAULT_ENERGY_BY_GPU = "data/processed/energy_by_gpu.csv"
 
+# Phase 7 output, Veda, 2026-08-23. Two scopes are published: die-only and
+# die+gddr. die+gddr is the default because the operational measurement is
+# board-level, so the embodied side has to cover at least the same board.
+DEFAULT_EMBODIED = "data/embodied/embodied_carbon_cardlevel.csv"
+DEFAULT_EMBODIED_DIE_ONLY = "data/embodied/embodied_carbon.csv"
+
+# Attached to every estimate loaded from Phase 7. The method is cited in
+# data/embodied/EMBODIED.md, which is what makes these sourced rather than
+# placeholders, but the scope caveat has to travel with the number.
+EMBODIED_CITATION = (
+    "ACT area-based estimate (Gupta et al., ISCA 2022), CPA swept 1.0 to 3.0 "
+    "kg CO2e/cm2, yield 0.875, packaging 0.150 kg/IC, GDDR 65 gCO2e/GB. "
+    "Sources in data/embodied/EMBODIED.md"
+)
+
+# The published die+gddr figures cover the die, its packaging and the memory.
+# They do not cover the PCB, VRM components, heatsink, heatpipes, fan, shroud,
+# backplate, connectors, assembly or transport, all of which a physically
+# swapped card includes. So this is a floor on card-level embodied carbon, not
+# an estimate of it, and every result says so.
+#
+# The direction matters: understating the replacement's embodied carbon makes
+# replacement look better, which is the same direction as the GPU-only scope
+# decision and as CLAUDE.md's note that a 2017-era node's CPU, RAM and PSU are
+# aged too. Those biases stack rather than cancel.
+EMBODIED_SCOPE_NOTE = (
+    "embodied figure is a FLOOR: die, packaging and memory only. It excludes "
+    "PCB, VRMs, cooler, fan, connectors, assembly and transport, so a real card "
+    "is higher and replacement looks better here than it should"
+)
+
 # Recorded on every result. The integral understates the saving in all six
 # measured replacement pairs, by 0.1% to 16.8%, because sampling aliasing makes
 # the old card look cheaper while the 2080 Ti's bias makes the new card look
@@ -134,6 +176,9 @@ class EmbodiedEstimate:
       sourced: False until a citation is attached. Taints every figure computed
         from it.
       citation: Where the figures came from. Required when sourced is True.
+      scope: What the figure covers, for example "die+gddr". Carried onto every
+        result because the scope, not the arithmetic, is what makes an embodied
+        figure comparable or not to the operational side.
     """
 
     gpu_model: str
@@ -141,6 +186,7 @@ class EmbodiedEstimate:
     high_kg: float
     sourced: bool
     citation: str = ""
+    scope: str = ""
 
     def __post_init__(self) -> None:
         """Validates at construction, in the style of benchmarks/_result.py.
@@ -279,6 +325,72 @@ def load_card_energy(path: str = DEFAULT_ENERGY_BY_GPU) -> list[CardEnergy]:
             "%d row(s) skipped: no per-job energy, usually mixed inner_iters", skipped
         )
     return cards
+
+
+def _normalise_gpu_model(name: str) -> str:
+    """Canonicalises a GPU model name so the two tables can be joined.
+
+    Phase 7 writes hyphenated names matching the Kubernetes
+    `nvidia.com/gpu.product` label ("NVIDIA-RTX-A4000"), while the energy table
+    carries the NVML name with spaces ("NVIDIA RTX A4000"). Joining on the raw
+    string silently produces zero matches and therefore zero results, which is
+    the kind of failure that looks like "no pairs found" rather than a bug.
+
+    Args:
+      name: Model name in either style.
+
+    Returns:
+      Lowercase, whitespace-collapsed key.
+    """
+    return " ".join(name.replace("-", " ").split()).lower()
+
+
+def load_embodied(
+    path: str = DEFAULT_EMBODIED,
+) -> dict[str, EmbodiedEstimate]:
+    """Reads the Phase 7 embodied carbon estimates.
+
+    These carry `sourced=True` because the method and every input is cited in
+    `data/embodied/EMBODIED.md`. That does not make them precise: the scope is
+    die, packaging and memory, which is a floor on a real card, and the note
+    saying so is attached to every result built from them.
+
+    Grid intensity is still an unsourced placeholder, so output remains
+    provisional regardless. That is the guard working as intended rather than a
+    reason to weaken it here.
+
+    Args:
+      path: Path to a Phase 7 CSV. Either scope works; the columns are the same.
+
+    Returns:
+      Dict keyed by normalised GPU model name.
+
+    Raises:
+      FileNotFoundError: If the Phase 7 table is missing.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"{path} not found. Phase 7 generates it; see data/embodied/EMBODIED.md."
+        )
+
+    estimates = {}
+    with open(path, newline="") as handle:
+        for row in csv.DictReader(handle):
+            model = row.get("gpu_model", "")
+            low = _as_float(row.get("embodied_kg_low"))
+            high = _as_float(row.get("embodied_kg_high"))
+            if not model or low is None or high is None:
+                logger.warning("skipping embodied row with no usable range: %r", row)
+                continue
+            estimates[_normalise_gpu_model(model)] = EmbodiedEstimate(
+                gpu_model=model,
+                low_kg=low,
+                high_kg=high,
+                sourced=True,
+                citation=EMBODIED_CITATION,
+                scope=row.get("scope", ""),
+            )
+    return estimates
 
 
 def _as_float(value) -> float | None:
@@ -476,6 +588,10 @@ def break_even_jobs(
     """
     interpretable, notes = _comparable(old, new)
     notes.append(CONSERVATISM_NOTE)
+    if embodied.scope:
+        notes.append(f"embodied scope: {embodied.scope}")
+        if "gddr" in embodied.scope.lower() or "die" in embodied.scope.lower():
+            notes.append(EMBODIED_SCOPE_NOTE)
     provisional = not (embodied.sourced and grid.sourced)
     if provisional:
         unsourced = [
@@ -513,26 +629,40 @@ def break_even_jobs(
     a, b = _linear_terms(old, new)
     if b:
         idle_delta_w = old.idle_w - new.idle_w
-        notes.append(
-            f"idle term contributes {b * total_intensity / J_PER_KWH:+.2f} kg "
-            f"over {horizon_years} y, before any jobs are run"
-        )
         if abs(idle_delta_w) < IDLE_WITHIN_CARD_SPREAD_W:
-            # The differential is inside the scatter one physical card shows
-            # across workloads, so its sign is not established. Say so rather
-            # than letting a signed kg figure look like a finding.
+            # Suppressed, not just annotated. The differential is inside the
+            # scatter one physical card shows across workloads, so zero is the
+            # defensible central estimate and a signed value is not.
+            #
+            # Annotating was not enough. With the placeholder embodied figure of
+            # 100 kg this term was a rounding error, but Phase 7 landed real
+            # estimates of 6 to 27 kg per card, and at that scale a 5.6 W
+            # differential repays the whole embodied cost on its own: the model
+            # reported "pays back before you run a single job" while the note
+            # underneath called the same figure noise. A caller reads the number,
+            # not the note.
+            suppressed_kg = b * total_intensity / J_PER_KWH
+            b = 0.0
             notes.append(
-                f"that idle figure is NOISE: the {abs(idle_delta_w):.2f} W "
+                f"idle term SUPPRESSED: the {abs(idle_delta_w):.2f} W "
                 f"differential is inside the {IDLE_WITHIN_CARD_SPREAD_W:.2f} W "
-                "spread one card shows across workloads, so even its sign is "
-                "not established"
+                "spread one card shows across workloads, so its sign is not "
+                f"established. It would have contributed {suppressed_kg:+.2f} kg "
+                f"over {horizon_years} y. Treated as zero, which is what the "
+                "fleet measured idle to be: equal across cards."
+            )
+        else:
+            notes.append(
+                f"idle term contributes {b * total_intensity / J_PER_KWH:+.2f} kg "
+                f"over {horizon_years} y, before any jobs are run"
             )
 
     # Solve (a * jobs_per_year + b) * total_intensity / J_PER_KWH >= embodied.
     required_annual_j = embodied_kg * J_PER_KWH / total_intensity
     if a <= 0:
         if b > 0 and b >= required_annual_j:
-            # Idle alone repays it, so no jobs are needed at all.
+            # Idle alone repays it, so no jobs are needed at all. Only reachable
+            # when the differential survived the suppression above.
             notes.append("repaid by the idle differential alone, before any jobs")
             return BreakEven(
                 jobs=0.0,
@@ -755,11 +885,17 @@ def main() -> None:
     parser.add_argument("--energy-table", default=DEFAULT_ENERGY_BY_GPU)
     parser.add_argument("--grid", default="CAISO", help="grid region preset")
     parser.add_argument(
+        "--embodied-table",
+        default=DEFAULT_EMBODIED,
+        help="Phase 7 embodied carbon CSV. Defaults to the die+gddr scope; pass "
+        f"{DEFAULT_EMBODIED_DIE_ONLY} for the die-only floor.",
+    )
+    parser.add_argument(
         "--embodied-kg",
         type=float,
-        default=50.0,
-        help="low end of the embodied carbon range for the replacement card. "
-        "UNSOURCED placeholder; Phase 7 supplies the real range.",
+        default=None,
+        help="override the Phase 7 table with a flat low-end figure, for "
+        "what-if runs. Unsourced, so output stays provisional.",
     )
     parser.add_argument(
         "--embodied-high-kg",
@@ -797,13 +933,26 @@ def main() -> None:
     args = parser.parse_args()
 
     grid = preset(args.grid).with_decline(args.annual_decline)
-    embodied_sourced = False
+
+    # Phase 7 landed on 2026-08-23, so embodied figures are sourced. Grid
+    # intensity is still a placeholder, so output is still provisional. Both
+    # halves have to be sourced before a number here is quotable.
+    override = args.embodied_kg is not None
+    table: dict[str, EmbodiedEstimate] = {}
+    if not override:
+        table = load_embodied(args.embodied_table)
+    embodied_sourced = bool(table) and not override
 
     if not args.allow_unsourced and not (embodied_sourced and grid.sourced):
+        missing = []
+        if not embodied_sourced:
+            missing.append("embodied")
+        if not grid.sourced:
+            missing.append("grid intensity")
         parser.error(
-            "embodied and grid figures are unsourced placeholders, so any number "
-            "printed here would be arithmetic rather than a result. Pass "
-            "--allow-unsourced to see it anyway, and do not quote it."
+            f"{' and '.join(missing)} unsourced, so any number printed here "
+            "would be arithmetic rather than a result. Pass --allow-unsourced "
+            "to see it anyway, and do not quote it."
         )
 
     cards = load_card_energy(args.energy_table)
@@ -812,19 +961,24 @@ def main() -> None:
         logger.warning("no comparable pairs in %s", args.energy_table)
         return
 
-    high_kg = args.embodied_high_kg
-    if high_kg is None:
-        high_kg = args.embodied_kg
-    if high_kg < args.embodied_kg:
-        parser.error(
-            f"--embodied-high-kg {high_kg} is below --embodied-kg {args.embodied_kg}"
-        )
-    is_range = high_kg > args.embodied_kg
-
     horizon = None if args.snapshot else args.horizon_years
-    embodied_label = (
-        f"{args.embodied_kg} to {high_kg} kg" if is_range else f"{args.embodied_kg} kg"
-    )
+    if override:
+        high_kg = args.embodied_high_kg
+        if high_kg is None:
+            high_kg = args.embodied_kg
+        if high_kg < args.embodied_kg:
+            parser.error(
+                f"--embodied-high-kg {high_kg} is below "
+                f"--embodied-kg {args.embodied_kg}"
+            )
+        embodied_label = (
+            f"{args.embodied_kg} to {high_kg} kg override"
+            if high_kg > args.embodied_kg
+            else f"{args.embodied_kg} kg override"
+        )
+    else:
+        embodied_label = f"Phase 7 {args.embodied_table}"
+
     print(
         f"grid={grid.name} {grid.kg_co2_per_kwh} kg/kWh "
         f"decline={grid.annual_decline:.1%}/y  "
@@ -834,12 +988,21 @@ def main() -> None:
     print()
 
     for old, new in pairs:
-        embodied = EmbodiedEstimate(
-            gpu_model=new.gpu_model,
-            low_kg=args.embodied_kg,
-            high_kg=high_kg,
-            sourced=False,
-        )
+        if override:
+            embodied = EmbodiedEstimate(
+                gpu_model=new.gpu_model,
+                low_kg=args.embodied_kg,
+                high_kg=high_kg,
+                sourced=False,
+            )
+        else:
+            embodied = table.get(_normalise_gpu_model(new.gpu_model))
+            if embodied is None:
+                logger.warning(
+                    "no Phase 7 embodied estimate for %s, skipping", new.gpu_model
+                )
+                continue
+        is_range = embodied.high_kg > embodied.low_kg
         # Both ends when a range was given. The low end is the most favourable
         # case for replacement, so "does not pay back" at the low end is the
         # robust result, and the spread between the two is what Phase 7's

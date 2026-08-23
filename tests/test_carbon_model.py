@@ -16,16 +16,19 @@ import unittest
 
 from analysis.carbon_model import (
     HOURS_PER_YEAR,
+    IDLE_WITHIN_CARD_SPREAD_W,
     J_PER_KWH,
     SAME_MODEL_VARIANCE,
     BreakEven,
     CardEnergy,
     EmbodiedEstimate,
+    _normalise_gpu_model,
     annual_energy_j,
     break_even_hours_per_year,
     break_even_jobs,
     carbon_saved_kg,
     cumulative_intensity,
+    load_embodied,
     payback_curve,
 )
 from analysis.grid_intensity import PRESETS, GridIntensity, preset
@@ -167,14 +170,19 @@ class IdleTerm(unittest.TestCase):
         relative = abs(delta_w) / MATMUL_1080TI.idle_w
         self.assertLess(relative, SAME_MODEL_VARIANCE)
 
-    def test_idle_differential_inside_measurement_scatter_is_called_noise(self):
-        # 25.43 W against 25.06 W, a 0.37 W differential, against a 13.57 W
-        # spread one card shows across workloads. The kg figure is reported but
-        # must not read as a finding.
+    def test_idle_differential_inside_measurement_scatter_is_suppressed(self):
+        # 25.43 W against 25.06 W, a 0.37 W differential, against the 13.57 W
+        # spread one card shows across workloads. Zero is the defensible central
+        # estimate, so the term is removed rather than merely annotated. See
+        # IdleSuppression below for why annotating was not enough.
         answer = break_even_jobs(
             PLACEHOLDER, MATMUL_1080TI, MATMUL_A4000, CAISO, horizon_years=6
         )
-        self.assertTrue(any("NOISE" in n for n in answer.notes))
+        self.assertTrue(any("SUPPRESSED" in n for n in answer.notes))
+        self.assertLess(
+            abs(MATMUL_1080TI.idle_w - MATMUL_A4000.idle_w),
+            IDLE_WITHIN_CARD_SPREAD_W,
+        )
 
     def test_large_idle_differential_is_not_called_noise(self):
         quiet = CardEnergy(
@@ -200,6 +208,104 @@ class IdleTerm(unittest.TestCase):
     def test_negative_jobs_refused(self):
         with self.assertRaises(ValueError):
             annual_energy_j(MATMUL_1080TI, jobs_per_year=-1)
+
+
+class IdleSuppression(unittest.TestCase):
+    """A noise-level idle differential must not decide the answer.
+
+    Regression for a defect Phase 7 exposed. With the 100 kg placeholder the
+    idle term was a rounding error; against the measured 6 to 27 kg per card a
+    5.6 W differential repaid the whole embodied cost on its own, so the model
+    reported "pays back before a single job" while the note underneath called
+    the same figure noise.
+    """
+
+    def _pair_with_idle_gap(self, gap_w: float) -> CardEnergy:
+        return CardEnergy(
+            gpu_model="quieter card",
+            benchmark="matmul",
+            config_id=MATMUL_1080TI.config_id,
+            energy_j_per_job=MATMUL_A4000.energy_j_per_job,
+            runtime_s_per_job=MATMUL_A4000.runtime_s_per_job,
+            idle_w=MATMUL_1080TI.idle_w - gap_w,
+            n_runs=5,
+            n_physical_gpus=2,
+            work_hash=MATMUL_1080TI.work_hash,
+        )
+
+    def test_noise_level_idle_cannot_produce_instant_payback(self):
+        tiny = EmbodiedEstimate("quieter card", 9.5, 26.7, sourced=False)
+        new = self._pair_with_idle_gap(5.6)
+        answer = break_even_jobs(
+            tiny, MATMUL_1080TI, new, CAISO, horizon_years=6, use_high_estimate=True
+        )
+        self.assertNotEqual(answer.jobs, 0.0, "noise must not repay the card alone")
+        self.assertGreater(answer.active_hours_per_year, 0.0)
+        self.assertTrue(any("SUPPRESSED" in n for n in answer.notes))
+
+    def test_suppression_reports_what_it_removed(self):
+        tiny = EmbodiedEstimate("quieter card", 9.5, 26.7, sourced=False)
+        new = self._pair_with_idle_gap(5.6)
+        answer = break_even_jobs(tiny, MATMUL_1080TI, new, CAISO, horizon_years=6)
+        note = next(n for n in answer.notes if "SUPPRESSED" in n)
+        self.assertIn("would have contributed", note)
+
+    def test_idle_gap_above_the_band_survives(self):
+        big = EmbodiedEstimate("quieter card", 9.5, 26.7, sourced=False)
+        new = self._pair_with_idle_gap(25.0)
+        answer = break_even_jobs(big, MATMUL_1080TI, new, CAISO, horizon_years=6)
+        self.assertFalse(any("SUPPRESSED" in n for n in answer.notes))
+        self.assertTrue(any("idle term contributes" in n for n in answer.notes))
+
+
+class Phase7Inputs(unittest.TestCase):
+    def test_loads_the_published_estimates(self):
+        table = load_embodied()
+        self.assertTrue(table, "Phase 7 table should not be empty")
+        for estimate in table.values():
+            self.assertTrue(estimate.sourced)
+            self.assertTrue(estimate.citation)
+            self.assertLessEqual(estimate.low_kg, estimate.high_kg)
+
+    def test_name_styles_join(self):
+        # Phase 7 writes the hyphenated k8s label, the energy table carries the
+        # NVML name. Joining on the raw string yields zero matches and therefore
+        # zero results, which reads as "no pairs found" rather than a bug.
+        self.assertEqual(
+            _normalise_gpu_model("NVIDIA-GeForce-GTX-1080-Ti"),
+            _normalise_gpu_model("NVIDIA GeForce GTX 1080 Ti"),
+        )
+
+    def test_every_measured_card_has_an_estimate(self):
+        table = load_embodied()
+        for model in (
+            "NVIDIA GeForce GTX 1080 Ti",
+            "NVIDIA GeForce RTX 2080 Ti",
+            "NVIDIA RTX A4000",
+        ):
+            self.assertIn(_normalise_gpu_model(model), table)
+
+    def test_scope_floor_note_rides_on_every_result(self):
+        table = load_embodied()
+        embodied = table[_normalise_gpu_model("NVIDIA RTX A4000")]
+        answer = break_even_jobs(
+            embodied, MATMUL_1080TI, MATMUL_A4000, CAISO, horizon_years=6
+        )
+        self.assertTrue(any("FLOOR" in n for n in answer.notes))
+        self.assertTrue(any("die+gddr" in n for n in answer.notes))
+
+    def test_sourced_embodied_still_provisional_while_grid_is_not(self):
+        table = load_embodied()
+        embodied = table[_normalise_gpu_model("NVIDIA RTX A4000")]
+        answer = break_even_jobs(embodied, MATMUL_1080TI, MATMUL_A4000, CAISO)
+        self.assertTrue(embodied.sourced)
+        self.assertFalse(CAISO.sourced)
+        self.assertTrue(answer.provisional, "grid alone must keep it provisional")
+
+    def test_missing_table_raises_with_a_pointer(self):
+        with self.assertRaises(FileNotFoundError) as caught:
+            load_embodied("data/embodied/does-not-exist.csv")
+        self.assertIn("EMBODIED.md", str(caught.exception))
 
 
 class VarianceGuard(unittest.TestCase):
