@@ -20,9 +20,9 @@ gpu-retirement-analysis/
 │   ├── power_monitor.py     # PowerMonitor class: background thread samples nvmlDeviceGetPowerUsage every 200ms, integrates to joules
 │   └── runner.py            # Orchestrator: starts PowerMonitor, runs a benchmark fn, stops monitor, writes CSV to /results
 ├── analysis/
-│   ├── carbon_model.py      # (planned) break-even math: embodied carbon vs saved operational carbon
+│   ├── carbon_model.py      # Break-even math: embodied carbon vs saved operational carbon. Provisional until Phase 7 sources embodied figures
 │   ├── sensitivity.py       # (planned) sweep embodied carbon range, show where break-even flips
-│   ├── grid_intensity.py    # (planned) grid carbon intensity presets (CAISO, national avg, ERCOT, PJM)
+│   ├── grid_intensity.py    # Grid carbon intensity presets (CAISO, national avg, ERCOT, PJM), all unsourced placeholders
 │   └── plots.py             # (planned) break-even chart generation
 └── data/
     ├── raw/                 # (planned) raw CSV output per benchmark run
