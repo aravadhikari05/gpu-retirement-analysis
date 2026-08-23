@@ -64,6 +64,11 @@ KEEP_CONFIGS = (
 DEFAULT_RUNS = "data/raw/runs/runs.jsonl"
 DEFAULT_OUT_PREFIX = "data/processed/fleet_runs"
 
+# Kept out of the CSV only. Every field stays in the JSONL. These are bulk text
+# rather than measurements, and they make the table unreadable without adding
+# anything a spreadsheet can use.
+CSV_EXCLUDED_FIELDS = frozenset({"generated_text"})
+
 
 def load_runs(path: str) -> list[dict]:
     """Reads JSONL, skipping blank lines. A truncated final line is fatal.
@@ -120,11 +125,16 @@ def select(runs: list[dict], keep_configs: tuple[str, ...]) -> list[dict]:
 
 
 def scalar_fields(runs: list[dict]) -> list[str]:
-    """Collects column names in first-seen order, skipping list and dict values.
+    """Collects column names in first-seen order, skipping bulk and structured values.
 
     The CSV is the convenience output. Fields such as the per-batch loss
     sequence stay in the JSONL rather than being flattened into a cell that
-    nothing can parse back.
+    nothing can parse back. Long free text is dropped for the same reason:
+    `generated_text` is roughly 4 kB of model output containing newlines, and
+    although csv quotes it correctly, it turned a 50 row table into a 2125 line
+    file that no spreadsheet or terminal renders usefully. It stays in the
+    JSONL, which is where anything wanting to inspect the LLM output should
+    read it from.
 
     Args:
         runs: The selected run records.
@@ -135,8 +145,15 @@ def scalar_fields(runs: list[dict]) -> list[str]:
     fields: list[str] = []
     for run in runs:
         for key, value in run.items():
-            if key not in fields and not isinstance(value, (list, dict)):
-                fields.append(key)
+            if key in fields or key in CSV_EXCLUDED_FIELDS:
+                continue
+            if isinstance(value, (list, dict)):
+                continue
+            # Guards against a future free-text field reintroducing the same
+            # problem without anyone naming it in CSV_EXCLUDED_FIELDS.
+            if isinstance(value, str) and "\n" in value:
+                continue
+            fields.append(key)
     return fields
 
 
