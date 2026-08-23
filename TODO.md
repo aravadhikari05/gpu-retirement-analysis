@@ -268,15 +268,45 @@ worth invalidating this one over.
 Yang et al. (2024), who document cached readings. Both were detectable only
 because the full sample trace is retained.
 
-### The 2080 Ti energy counter bias
+### The 2080 Ti bias: CHARACTERISED 2026-08-23, still unexplained
 
-Five independent confirmations across three workloads and a 60 s preflight
-window, clustered at 5.6% to 6.9%. It is a systematic per-card bias, not a
-method problem. **Which of the two figures to trust on Turing is still open**
-and the paper has to address it. Figures per card and per workload are in
+**Model-level, not a defective card.** The 16 rows come from two different
+physical 2080 Tis on two different nodes: +5.889% and +6.639%. Not a sampling
+artifact either, its traces are the healthiest in the fleet. Full detail in
 `CLAUDE.md` under Measurement contract.
 
----
+**Still open:** whether the error is multiplicative (a 6.17% scale error) or
+additive (a +10.1 W offset). Both fit the data almost equally well because all
+16 rows sit in a narrow 161 to 170 W band.
+
+**Cheap way to settle it, unclaimed.** Record an energy-counter delta across the
+idle windows, which sit near 20 W and would separate the two models immediately.
+`measure_idle()` already runs `PowerMonitor` for 60 s per window and already
+reads the counter, so this is a few lines in `measurement/runner.py`. It changes
+the image digest, so bundle it with the sampling-interval change rather than
+doing it alone.
+
+Which figure to trust on Turing remains an open question the paper has to
+address. It does not block anything: the reported numbers use the integral
+throughout and the direction of the error is conservative.
+
+### The distinct-value heuristic is not a proxy for accuracy
+
+**Found 2026-08-23, and it corrects how this project has been reading its own
+diagnostics.** The A4000 has a worse distinct-value ratio than the RTX 3090 that
+got the 3090's power condemned, 0.28 to 0.35 with runs of 5 identical readings,
+and it agrees with its hardware counter to **0.02%**. The 2080 Ti has pristine
+traces and is **6%** off. The signature and the accuracy run backwards.
+
+**Use counter against integral as the test**, not distinct-value counting. A
+stale reading repeated across a window makes the integral disagree with the
+hardware accumulator; agreement to 0.02% means the samples were not stale
+however few distinct values they took.
+
+Consequences: the 3090 was set aside on weak evidence and deserves the proper
+check when a card can next be obtained, and the methods section should present
+counter-against-integral as the diagnostic rather than repeating the
+distinct-value heuristic from Yang et al. (2024) as though it were one.
 
 ## Work that is unblocked and unclaimed, no ordering
 

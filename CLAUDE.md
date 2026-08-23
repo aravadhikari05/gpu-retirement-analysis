@@ -285,11 +285,36 @@ and +6.57% on resnet**. The 2080 Ti's bias is systematic, appearing on a flat
 effect. It is not coarse power quantisation either: every card measured reports
 at 0.001 to 0.004 W granularity.
 
-**The RTX 3090 shows the cached-reading signature.** Only 58 distinct power
-values across 145 samples on matmul, and 27 across 79 on resnet, against 211 of
-224 on the 2080 Ti. That is the Yang et al. (2024) failure the retained sample
-trace exists to detect. Treat 3090 power as unverified until preflight has run
-on it. Detail in `paper/methods-notes.md`.
+**The RTX 3090 shows what looks like the cached-reading signature.** Only 58
+distinct power values across 145 samples on matmul, and 27 across 79 on resnet,
+against 211 of 224 on the 2080 Ti. Treat 3090 power as unverified. Detail in
+`paper/methods-notes.md`.
+
+**But the distinct-value ratio is not a proxy for accuracy, measured 2026-08-23,
+and this reading of it was probably wrong.** The fleet pass produced the exact
+counter-example:
+
+| Card | distinct values per sample | longest identical run | integral against counter |
+|---|---|---|---|
+| RTX A4000 | 0.28 to 0.35 | 5 | **+0.02%** |
+| RTX 2080 Ti | 0.90 to 0.99 | 2 | **+6%** |
+
+The card with the worse signature than the 3090's is accurate to two decimal
+places against its own hardware counter, and the card with pristine fresh
+readings is the biased one. A low distinct-value ratio is at least as likely to
+mean the card's power is genuinely stable, or quantised at a coarser effective
+resolution, as that readings are stale.
+
+**The test that settles it is counter against integral, not distinct-value
+counting.** A stale reading repeated across a window makes the trapezoidal
+integral disagree with the hardware accumulator; if the two agree to 0.02%, the
+samples were not stale no matter how few distinct values they took. Apply that
+test before condemning any card's power data, and say so in the methods section
+rather than repeating the distinct-value heuristic as though it were diagnostic.
+
+This does not clear the 3090, which has never been checked against its counter
+the way the A4000 now has. It does mean the 3090 was set aside on weak evidence
+and the check is cheap when a card can next be obtained.
 
 **Confirmed across 50 fleet rows, 2026-08-23, and the 2080 Ti's bias is now
 beyond doubt.** Per-card and per-workload, integral against counter:
@@ -301,9 +326,36 @@ beyond doubt.** Per-card and per-workload, integral against counter:
 | RTX A4000 | +0.02% to +0.08% | +0.01% to +0.05% | +0.02% to +0.08% |
 
 The 2080 Ti's gap now has five independent confirmations across three workloads
-and a 60 s preflight window, clustered tightly at 5.6 to 6.9%. It is a
-systematic per-card bias, not a method problem, and which of the two figures to
-trust on Turing is still an open question the paper has to address.
+and a 60 s preflight window, clustered tightly at 5.6 to 6.9%.
+
+**Characterised 2026-08-23. It is a model-level trait, not a defective card.**
+The 16 fleet rows come from **two different physical 2080 Tis on two different
+nodes**, `GPU-1b9d9ca0` on `k8s-haosu-18` at +5.889% over matmul and resnet, and
+`GPU-91cd016c` on `k8s-haosu-11` at +6.639% over llm. One bad unit is ruled out.
+Note the two cards ran different workloads, so card and workload are confounded
+and the 0.75 point difference between them cannot be attributed to either.
+
+What it is not: a sampling artifact. The 2080 Ti's traces are the healthiest in
+the fleet, 90 to 99% distinct values with a longest identical run of 2 and no
+gaps. The samples are fresh and plentiful and simply read about 6% high.
+
+Multiplicative or additive is **not decidable from this data**. A 6.17% scale
+error and a +10.1 W offset fit almost equally well, mean residual 0.60 W against
+0.70 W, because all 16 rows sit in a narrow 161 to 170 W band. Separating them
+needs measurements at very different power levels on the same card. The cheapest
+route is to record an energy-counter delta across the idle windows, which sit
+near 20 W: `measure_idle()` already runs `PowerMonitor` for 60 s and the counter
+is already read, so this is a few lines and it would settle the question.
+
+The likeliest explanation is that the instantaneous power sensor is calibrated
+high on Turing while the energy counter uses a different accumulation path.
+NVIDIA documents NVML power-reading accuracy at roughly plus or minus 5%, so 6%
+is at the edge of spec rather than a fault.
+
+Weak hint, two points and worth no more than a hypothesis: within the one card
+that ran two workloads, the gap grows with trace variability, matmul at
+cv 0.084 giving +5.61% and resnet at cv 0.193 giving +6.27%. That would suit a
+sensor that over-reads transients.
 
 **Diagnosed 2026-08-23: the 1080 Ti resnet gap is sampling aliasing, not a card
 defect.** `PowerMonitor` samples every 0.2 s. resnet on the 1080 Ti runs 1000
