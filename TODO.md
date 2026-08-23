@@ -55,8 +55,11 @@ here only because they change what later work is allowed to claim:
 2. **Idle power is roughly equal across the three cards**, 25.3 W to 27.1 W with
    a live CUDA context, and the newest card is not the lowest. The difference is
    inside the variance bound above, so the honest statement is that replacement
-   buys no measurable idle saving. This matters because the project premise is
-   about cards that sit idle.
+   buys no measurable idle saving, and break-even rests almost entirely on
+   active hours. This reverses an earlier claim of a 3.3x idle advantage for the
+   newer card, which came from misreading a preflight load-trace minimum as an
+   idle figure; see the closed item under Open findings. It matters because the
+   project premise is about cards that sit idle.
 
 ---
 
@@ -206,20 +209,30 @@ expensive with every run that writes into it. See `k8s/STORAGE.md`.
 These are unresolved measurements, not bugs. Each needs a decision about what to
 report, and two of them affect numbers that reach the paper.
 
-### The 55.03 W idle figure contradicts the fleet measurements
+### The 55.03 W idle figure: CLOSED 2026-08-23, it was never an idle figure
 
-`CLAUDE.md` has quoted 55.03 W as the 1080 Ti idle draw since 2026-08-18. The
-fleet pass measured the same model at **8.75 W with no CUDA context and about
-25 W with one**, a factor of 5.7 below it. The 55.03 W came from the preflight
-on `k8s-gpu-2` and reads as the minimum of a load trace rather than a dedicated
-idle window.
+Kept as a closed item because the number reached four documents and one of them
+was paper-bound, so anyone who read an older copy needs to know it moved.
 
-**Resolve which it is before any idle number reaches the paper.** Idle draw is
-the term the whole project premise rests on. If 55.03 W is a real idle floor on
-a different physical 1080 Ti, that is a second and much larger same-model
-variance result. If it is a load-trace minimum, this project has been quoting a
-load figure as an idle figure for days. The preflight record is in
-`data/raw/preflight/`.
+`min_power_w` from `measurement/preflight.py`, whose window is loaded on
+purpose: the monitor starts and a sustained matmul runs throughout, under the
+comment "Light sustained load so the reading is not idle." That window averaged
+229.96 W. A load-trace minimum is an upper bound on idle draw, not a
+measurement, so it never contradicted the fleet's 25 W. The same applies to the
+16.52 W once quoted as the A4000's idle floor: `preflight.py` has no idle field,
+so every power figure from it is of this kind.
+
+**The correction inverts a claim that was heading for the paper.** The A4000 was
+described in `paper/methods-notes.md` as having a 3.3x idle advantage over the
+1080 Ti. Measured directly, the two are within 2 W (25.28 W against 27.06 W)
+with the newer card slightly higher, and that difference is inside the 6.43%
+variance bound. **Replacement buys no measurable idle saving**, so break-even
+rests almost entirely on active hours. Corrected in `CLAUDE.md`,
+`paper/methods-notes.md`, `docs/tasks/phase8-break-even-inputs.md` and
+`data/raw/runs/README.md`.
+
+Genuinely unmeasured, if anyone wants it: idle on the specific `k8s-gpu-2` card,
+and idle on the L4 and 3090 at all. Neither blocks anything.
 
 ### The 1080 Ti disagrees with itself on resnet only
 

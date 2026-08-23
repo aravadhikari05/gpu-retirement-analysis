@@ -75,8 +75,12 @@ clipped to the marked region.
 Incidental: the full trace bottoms at **17.158 W** on the L4, outside the
 region. That is not an idle-power measurement (it is whatever the card was doing
 between `start()` and the region mark) but it is the first L4 number in that
-neighbourhood, against 55.03 W observed idle on the 1080 Ti. See the idle-power
-item in `docs/tasks/phase8-break-even-inputs.md`.
+neighbourhood. It was previously compared here against "55.03 W observed idle on
+the 1080 Ti", but that figure is a preflight load-trace minimum and not an idle
+measurement either, so the two are the same kind of number rather than a
+contrast. Directly measured 1080 Ti idle is 8.75 to 17.39 W with no CUDA context
+and about 25 W with one. See the idle-power item in
+`docs/tasks/phase8-break-even-inputs.md`.
 
 ## legacy_matmul.csv
 

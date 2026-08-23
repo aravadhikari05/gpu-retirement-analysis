@@ -351,10 +351,23 @@ problem with the method.
 
 Two incidental A4000 observations. It is the only card measured so far that
 stays under its power limit: peak 130.336 W against a 140 W cap, where the
-1080 Ti reached 313.6 W against 300 W and the 2080 Ti 286.8 W against 280 W. And
-its idle floor is 16.52 W against the 1080 Ti's 55.03 W, a 3.3x difference in
-precisely the quantity that decides whether a mostly-idle card ever repays a
-replacement.
+1080 Ti reached 313.6 W against 300 W and the 2080 Ti 286.8 W against 280 W.
+
+**Corrected 2026-08-23.** This paragraph previously read the A4000's 16.52 W
+against the 1080 Ti's 55.03 W as "a 3.3x difference in idle floor". Neither
+number is an idle measurement. Both are `min_power_w`, the lowest sample of a
+preflight window that is loaded on purpose: `measurement/preflight.py` starts
+the monitor and immediately runs a sustained matmul, with the comment "Light
+sustained load so the reading is not idle." A load-trace minimum is an upper
+bound on idle draw, not a measurement of it.
+
+Directly measured idle, from the fleet pass of 2026-08-23, contradicts the
+claim outright. With a live CUDA context the 1080 Ti averages **25.28 W** and
+the A4000 **27.06 W** over 60 s windows, so the newer card idles no lower and
+possibly slightly higher. The difference is inside the 6.43% same-model variance
+bound, so the defensible statement is that **replacement buys no measurable idle
+saving**, which is close to the opposite of what this paragraph originally
+claimed. Do not carry the 3.3x figure into the paper.
 
 The A4000's 124 distinct values across 323 samples is less repetitive than the
 3090's 58 of 145 but well below the 2080 Ti's 211 of 224. Watch it for the

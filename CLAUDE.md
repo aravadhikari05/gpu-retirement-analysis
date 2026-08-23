@@ -266,8 +266,10 @@ by `RunContext` to scope energy to the timed region; see the subsection below.
 
 **Verified on one card, 2026-08-18.** GTX 1080 Ti, `k8s-gpu-2.ucsc.edu`:
 `nvidia-ml-py` is the resolved NVML provider, the energy counter works, and
-sampling is sane. 132 samples over 26.5 s, idle 55.03 W to 237.67 W under load,
-against an nvidia-smi power limit of 300 W. `n_failed_power_samples` was 0.
+sampling is sane. 132 samples over 26.5 s spanning 55.03 W to 237.67 W, against
+an nvidia-smi power limit of 300 W. Note the whole window is under load by
+design, so 55.03 W is the lowest sample of a loaded trace and **not** an idle
+figure; it was misread as one for several days. See the idle subsection below. `n_failed_power_samples` was 0.
 
 Power granularity on this card is **0.001 W**, with 130 distinct values across
 132 samples. The pitfall below about coarse 25 W quantisation does not apply to
@@ -863,11 +865,11 @@ Planned entry points in `analysis/carbon_model.py`: `break_even_jobs`,
 term and finds six gaps. Two are now closed.
 
 **Gap 1, idle power: closed 2026-08-23.** It is measured per pod in two windows
-and recorded on every row. Note the fleet pass also contradicted the 55.03 W
-idle figure this file had quoted since 2026-08-18, and found idle draw to be
-roughly equal across all three cards, which weakens rather than supports the
-premise that a mostly-idle card gains from replacement. See the Measurement
-contract and Established results.
+and recorded on every row. It also reversed the assumption that motivated it:
+idle draw is roughly equal across all three cards, so the operational saving
+from replacement is in active hours, not idle ones. The 55.03 W "idle" figure
+this file quoted from 2026-08-18 was a preflight load-trace minimum, not an idle
+measurement. See the Measurement contract and Established results.
 
 **Gap 5, the replacement unit: decided 2026-08-23. The unit is the GPU, not the
 node.** Phase 7 sources per-card embodied figures. Grounds: the operational
@@ -1106,16 +1108,30 @@ checked against.**
 which is the ordering the two windows were built to expose: a live CUDA context
 and allocator cost real watts on an otherwise unused card.
 
-**The 55.03 W this section expected is wrong, or is not an idle figure.** A
-1080 Ti measured here idles at 8.75 W with no context and about 25 W with one,
-which is a factor of 5.7 below it. The 55.03 W came from the 2026-08-18
-preflight on `k8s-gpu-2` and reads as the minimum of a load trace rather than a
-dedicated idle window. **Resolve which it is before any idle number reaches the
-paper**, because idle draw is the term the whole project premise rests on: a
-card that is idle most of the time never pays back a replacement. If 55.03 W is
-a real idle floor on a different physical 1080 Ti, that is a second and much
-larger same-model variance result. If it is a load-trace minimum, this file has
-been quoting a load figure as an idle figure since 2026-08-18.
+**Resolved 2026-08-23: the 55.03 W this section expected was never an idle
+figure.** It is `min_power_w` from `measurement/preflight.py`, whose power window
+is loaded on purpose: the monitor starts and a sustained matmul runs for the
+whole window, under the comment "Light sustained load so the reading is not
+idle." That window averaged 229.96 W and peaked at 237.67 W. The second
+preflight run on the same node gives 56.34 W the same way, which is why the
+number looked reproducible.
+
+A load-trace minimum is an **upper bound** on idle draw, not a measurement of
+it, so 55.03 W and the fleet's 25 W never contradicted each other. The same
+applies to the 16.52 W once quoted as the A4000's idle floor. Any power figure
+attributed to preflight is of this kind: `preflight.py` has no idle field.
+
+**Consequence, and it cuts against the project premise.** With the real figures,
+idle draw is essentially flat across the fleet and the newest card is highest.
+The 3.3x idle advantage once claimed for the A4000 does not exist, the
+difference that remains is inside the 6.43% same-model variance bound, and the
+defensible statement is that replacement buys **no measurable idle saving**.
+Break-even therefore rests almost entirely on active hours. Corrections were
+applied to `paper/methods-notes.md`, `docs/tasks/phase8-break-even-inputs.md`
+and `data/raw/runs/README.md`, all of which had inherited the figure.
+
+Still genuinely unmeasured: idle on the specific `k8s-gpu-2` card, and idle on
+the L4 and 3090 at all.
 
 One caveat on these windows. `idle_pre_context_peak_w` reaches 64 to 73 W on
 every card while the averages sit under 25 W, so co-tenant activity is landing
@@ -1169,7 +1185,10 @@ assumptions.
 - **A4000: done 2026-08-23.** Agrees to -0.894% over 60 s, in the same
   direction as the 1080 Ti, which makes the 2080 Ti an outlier among four cards
   rather than a method problem. It is also the only card measured that stays
-  under its power limit, and it idles at 16.52 W against the 1080 Ti's 55.03 W.
+  under its power limit. Its 16.52 W was recorded here as an idle floor against
+  the 1080 Ti's 55.03 W; both are preflight load-trace minima rather than idle
+  measurements, and directly measured idle has the two cards within 2 W of each
+  other. Corrected 2026-08-23.
 - **3090: still outstanding, and not for want of trying.** Of five GPUs the
   availability feed reported free on 2026-08-23, none could be obtained. Pinning
   to individual nodes returned `Insufficient nvidia.com/gpu` on one and

@@ -53,12 +53,27 @@ annual_energy = energy_per_job * jobs_per_year
 The equation above only contains the first. At the low utilisation that the
 whole project says is decisive, the second plausibly dominates.
 
-**Observed, not assumed.** Preflight on a GTX 1080 Ti at
-`k8s-gpu-2.ucsc.edu` incidentally caught it drawing **55.03 W** while
-effectively idle, against a 300 W reported limit
-(`data/raw/preflight/20260818T084227Z-gtx1080ti.json`). If an old card idles at
-55 W and a modern one idles nearer 15 W, that 40 W gap runs 8760 hours a year no
-matter how many jobs are submitted.
+**Superseded 2026-08-23. The motivating number in this paragraph was wrong, and
+measurement reversed its conclusion.**
+
+This originally read: preflight on a GTX 1080 Ti at `k8s-gpu-2.ucsc.edu` caught
+it drawing 55.03 W "while effectively idle", so an old card idling at 55 W
+against a modern one nearer 15 W leaves a 40 W gap running 8760 hours a year.
+
+That 55.03 W is `min_power_w` from a preflight window that is loaded on purpose
+(`measurement/preflight.py` runs a sustained matmul for the whole window), so it
+is an upper bound on idle draw rather than a measurement of it. The same applies
+to the 16.52 W that was quoted for the A4000.
+
+Idle is now measured directly, per pod, in two 60 s windows split by CUDA
+context creation. With a live context the three cards sit at **25.28 W
+(1080 Ti), 26.89 W (2080 Ti) and 27.06 W (A4000)**, which is essentially flat,
+with the newest card highest. The gap this section was built on does not exist.
+
+**The argument for recording idle still stands and was worth acting on**, but
+its conclusion inverts: idle draw does not favour replacement, so break-even
+depends almost entirely on active hours. A mostly-idle card is not merely slow
+to repay a replacement, it has close to nothing to repay it with.
 
 **Proposal:** add a short idle sampling window to `runner.py`, before warmup and
 after the timed region, recorded as `idle_watts_pre` and `idle_watts_post`.
