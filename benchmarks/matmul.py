@@ -36,6 +36,7 @@ import torch
 
 from benchmarks._context import RunContext, sync_device
 from benchmarks._precision import set_precision
+from benchmarks._result import WorkloadResult
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ def run(
     device: str = "",
     gpu_model: str = "",
     ctx: RunContext | None = None,
-) -> dict:
+) -> WorkloadResult:
     """Runs the fixed-work matrix multiplication benchmark.
 
     Args:
@@ -93,8 +94,8 @@ def run(
         standalone CLI run.
 
     Returns:
-      dict with runtime_seconds, work_hash, total_flops and the metadata needed
-      to prove two runs did the same work.
+      A WorkloadResult. The required fields are enforced by its constructor;
+      total_flops and the matmul-specific metadata ride in `extra`.
     """
     if n < 1:
         raise ValueError(f"n must be >= 1, got {n}")
@@ -153,31 +154,43 @@ def run(
     if device.startswith("cuda"):
         torch.cuda.empty_cache()
 
-    record = {
-        "workload": "matmul",
-        # config_id states what was asked for; work_hash proves it happened.
-        # Format follows benchmarks/llm_inference.py so the three workloads are
-        # groupable by the same column in analysis.
-        "config_id": f"matmul|n{n}|{precision}|i{iters}|s{SEED}",
-        "runtime_seconds": runtime_seconds,
-        "work_hash": work_hash,
-        "work_hash_covers": "inputs and work shape, not the product",
+    # Everything the required set does not already own. precision and both
+    # TF32 read-backs are lifted out of precision_record into the constructor,
+    # since extra may not shadow a required field.
+    extra = {
         "result_checksum": result_checksum,
-        # The loop inside the timed region. Energy per unit of work is
-        # energy_j / inner_iters. Distinct from the runner's --repeats, which is
-        # the outer loop for statistical spread.
-        "inner_iters": iters,
         "n": n,
         "iters": iters,
         "warmup_iters": warmup,
         "seed": SEED,
         "total_flops": total_flops,
-        "gflops_per_s": total_flops / runtime_seconds / 1e9 if runtime_seconds else 0.0,
         "gpu_model_torch": _detect_gpu_model(device, gpu_model or None),
         "dtype": str(dtype),
+        "device_requested": precision_record["device_requested"],
+        "torch_version": precision_record["torch_version"],
     }
-    record.update(precision_record)
-    return record
+
+    return WorkloadResult(
+        workload="matmul",
+        # config_id states what was asked for; work_hash proves it happened.
+        # Format follows benchmarks/llm_inference.py so the three workloads are
+        # groupable by the same column in analysis.
+        config_id=f"matmul|n{n}|{precision}|i{iters}|s{SEED}",
+        work_hash=work_hash,
+        # Config kind: the hash covers the inputs and the shape of the work, so
+        # it proves identical work was requested, not identical numbers produced.
+        work_hash_kind="config",
+        work_hash_covers="inputs and work shape, not the product",
+        precision=precision_record["precision"],
+        allow_tf32_matmul=precision_record["allow_tf32_matmul"],
+        allow_tf32_cudnn=precision_record["allow_tf32_cudnn"],
+        # The loop inside the timed region. Energy per unit of work is
+        # energy_j / inner_iters. Distinct from the runner's --repeats, which is
+        # the outer loop for statistical spread.
+        inner_iters=iters,
+        runtime_seconds=runtime_seconds,
+        extra=extra,
+    )
 
 
 if __name__ == "__main__":
@@ -200,11 +213,13 @@ if __name__ == "__main__":
         precision=args.precision,
         device=args.device,
         gpu_model=args.gpu_model,
-    )
+    ).to_row()
+    # gflops_per_s is derived, not stored: CLAUDE.md keeps derived quantities out
+    # of the record and computes them in the summary step.
     logger.info(
         "runtime=%.4fs %.1f GFLOP/s work_hash=%s",
         result["runtime_seconds"],
-        result["gflops_per_s"],
+        result["total_flops"] / result["runtime_seconds"] / 1e9,
         result["work_hash"][:16],
     )
     if result["runtime_seconds"] < 30:
