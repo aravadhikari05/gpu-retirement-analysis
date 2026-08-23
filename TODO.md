@@ -243,9 +243,19 @@ out. Full evidence in `CLAUDE.md` under Measurement contract. It is the only one
 of nine workload-and-card pairs with a period ratio near 1.0, and it is the only
 one with the anomaly.
 
-**Consequence for results: use `energy_j_counter` for 1080 Ti resnet.** A
-hardware accumulator cannot alias. Nothing else is affected: every other pair
-agrees to well under 1% apart from the 2080 Ti's separate per-card bias below.
+**Decided: report `energy_j`, the integral, throughout, and document the
+deviations rather than correcting per cell.** Mixing instruments inside one
+table is what a reviewer should object to, and switching to counters everywhere
+would force a bet on the 2080 Ti, where neither figure is known to be right.
+
+The choice is conservative, which is what settles it. The integral understates
+the energy saving in **all six** replacement pairs, by 0.1% (matmul, A4000) to
+16.8% (resnet, 2080 Ti), because aliasing makes the old card look cheaper while
+the 2080 Ti's bias makes a new card look costlier. Every break-even threshold
+from these rows is therefore too pessimistic, never too optimistic.
+
+Phase 8 should read `energy_j`. Keep `energy_j_counter` alongside it: it is the
+evidence for the error analysis, not a spare.
 
 **Left deliberately undone:** changing the sampling interval. 0.2 s is a poor
 default because it is close to a plausible per-batch time for image training on

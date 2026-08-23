@@ -330,7 +330,26 @@ Evidence, in order of strength:
    189.8 to 198.9 W.
 
 **The counter is right and the integral is biased here.** A hardware accumulator
-cannot alias. For 1080 Ti resnet, use `energy_j_counter`.
+cannot alias.
+
+**Decided 2026-08-23 anyway: report the integral throughout, and document the
+deviations.** Switching one card-and-workload pair to the counter would mix two
+instruments inside one table, which is exactly what a reviewer should object to,
+and adopting the counter everywhere would force a bet on the 2080 Ti, where
+nobody knows which of its two figures is correct. One method applied uniformly,
+with the known deviations quantified, is the defensible position.
+
+It is also the conservative one, which is what settles it. The integral
+**understates the energy saving in all six replacement pairs**, because the two
+biases compound: aliasing makes the old card look cheaper than it is, and the
+2080 Ti's bias makes a new card look costlier. Delta energy comes out low by
+0.1% (matmul, A4000) to 16.8% (resnet, 2080 Ti), so every break-even threshold
+derived from these rows is too pessimistic rather than too optimistic. A paper
+that understates its own result is making the safe error.
+
+`energy_j_counter` must therefore stay in the rows and in the derived tables. It
+is the evidence for the claim, and "conservative by 0.1 to 16.8%" is only
+checkable because both figures exist side by side on every row.
 
 **0.2 s is a bad default interval** and the roundness is what makes it dangerous:
 it sits close to a plausible per-batch time for image training on mid-range
