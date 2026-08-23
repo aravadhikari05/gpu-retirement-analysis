@@ -211,6 +211,46 @@ class EmbodiedEstimate:
                 "carries no citation"
             )
 
+    def scaled(self, factor: float, reason: str) -> "EmbodiedEstimate":
+        """Returns a copy with both ends multiplied, recording why.
+
+        The published scope is die, packaging and memory. Turning that into a
+        whole-card figure means multiplying by a bill-of-materials factor, and
+        the factor is an assumption rather than a measurement, so it is applied
+        here where it has to be named rather than folded into the input data.
+
+        The scaled estimate keeps `sourced` from the original: scaling a cited
+        figure does not decite it, and the reason travels in `scope` so a result
+        built from it says what was assumed.
+
+        Args:
+          factor: Multiplier, at least 1.0. Scaling down an already-floor
+            estimate is not a case this model needs and is refused.
+          reason: Short phrase recorded in scope, for example "full-card BOM x3".
+
+        Returns:
+          A new EmbodiedEstimate.
+
+        Raises:
+          ValueError: If factor is below 1.0 or reason is empty.
+        """
+        if factor < 1.0:
+            raise ValueError(
+                f"factor must be at least 1.0, got {factor}. The published scope "
+                "is already a floor, so scaling below it has no defensible reading."
+            )
+        if not reason:
+            raise ValueError("reason must be a non-empty string")
+        scope = f"{self.scope}, {reason}" if self.scope else reason
+        return EmbodiedEstimate(
+            gpu_model=self.gpu_model,
+            low_kg=self.low_kg * factor,
+            high_kg=self.high_kg * factor,
+            sourced=self.sourced,
+            citation=self.citation,
+            scope=scope,
+        )
+
 
 @dataclass(frozen=True)
 class CardEnergy:

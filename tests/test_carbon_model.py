@@ -308,6 +308,83 @@ class Phase7Inputs(unittest.TestCase):
         self.assertIn("EMBODIED.md", str(caught.exception))
 
 
+class AdversarialCase(unittest.TestCase):
+    """The conclusion has to survive every bias at its worst simultaneously.
+
+    Four biases all favour replacement: the embodied scope is a floor, CPA is
+    swept uniformly across three process nodes when newer nodes trend higher,
+    the replacement unit is the GPU rather than the node, and yield is a flat
+    generic default. Naming them qualitatively is not enough, because a reader
+    cannot tell whether they overturn the result or merely narrow it.
+
+    The pair pinned here is matmul, GTX 1080 Ti to RTX A4000, which is the
+    genuine retirement decision. The 1080 Ti to 2080 Ti pair is 2017 against
+    2018 hardware and nobody faces that choice.
+
+    If this test ever fails, the paper's headline claim has changed and the
+    failure is the finding, not a bug to route around.
+    """
+
+    # RTX A4000: GA104, 392 mm2, Samsung 8nm, 16 GB GDDR6.
+    DIE_CM2 = 3.92
+    YIELD = 0.875
+    PACKAGING_KG = 0.150
+    MEMORY_KG = 16 * 0.065
+
+    def _embodied_kg(self, cpa: float, bom: float) -> float:
+        return (
+            self.DIE_CM2 * cpa / self.YIELD + self.PACKAGING_KG + self.MEMORY_KG
+        ) * bom
+
+    def _hours(self, kg: float) -> float:
+        estimate = EmbodiedEstimate("NVIDIA RTX A4000", kg, kg, sourced=False)
+        return break_even_jobs(
+            estimate, MATMUL_1080TI, MATMUL_A4000, CAISO, horizon_years=6
+        ).active_hours_per_year
+
+    def test_worst_corner_still_pays_back_under_three_percent_of_a_year(self):
+        # CPA 3.0 is the top of the 8nm band, BOM x3 the top of the whole-card
+        # multiplier, yield left at ACT's default since 392 mm2 makes it
+        # defensible, grid held flat which is conservative in the right
+        # direction.
+        worst_kg = self._embodied_kg(cpa=3.0, bom=3.0)
+        hours = self._hours(worst_kg)
+        self.assertGreater(worst_kg, 40.0, "worst corner should be ~44 kg")
+        self.assertLess(
+            hours / HOURS_PER_YEAR,
+            0.03,
+            "replacement must still repay itself under 3% utilisation",
+        )
+
+    def test_break_even_is_linear_in_embodied_once_idle_is_suppressed(self):
+        # With the idle term suppressed the inequality is a division, so the
+        # break-even hours scale exactly with embodied carbon. This is what
+        # makes the low-high spread a one-parameter sweep rather than a
+        # confidence interval, and it is worth pinning so nobody reads it as one.
+        base = self._embodied_kg(cpa=1.0, bom=1.0)
+        worst = self._embodied_kg(cpa=3.0, bom=3.0)
+        self.assertAlmostEqual(
+            self._hours(worst) / self._hours(base), worst / base, places=6
+        )
+
+    def test_scaling_records_the_assumption_and_keeps_provenance(self):
+        table = load_embodied()
+        base = table[_normalise_gpu_model("NVIDIA RTX A4000")]
+        scaled = base.scaled(3.0, "full-card BOM x3")
+        self.assertAlmostEqual(scaled.low_kg, base.low_kg * 3.0)
+        self.assertTrue(scaled.sourced, "scaling a cited figure does not decite it")
+        self.assertIn("full-card BOM x3", scaled.scope)
+        self.assertIn("die+gddr", scaled.scope)
+
+    def test_scaling_below_one_is_refused(self):
+        table = load_embodied()
+        base = table[_normalise_gpu_model("NVIDIA RTX A4000")]
+        with self.assertRaises(ValueError):
+            base.scaled(0.5, "wishful")
+        with self.assertRaises(ValueError):
+            base.scaled(2.0, "")
+
+
 class VarianceGuard(unittest.TestCase):
     def test_real_pair_is_interpretable(self):
         answer = break_even_jobs(PLACEHOLDER, MATMUL_1080TI, MATMUL_A4000, CAISO)

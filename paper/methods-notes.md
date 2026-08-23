@@ -487,63 +487,84 @@ model flags any differential below 13.57 W as noise for exactly this reason.
 Methods should state that the idle term is bounded and indistinguishable from
 zero, not that a particular card idles lower.
 
-## First break-even numbers: replacement pays back at very low utilisation
+## Break-even survives the full adversarial case
 
-Computed 2026-08-23 by `analysis/carbon_model.py`, combining the fleet pass
-energy measurements with Phase 7 embodied estimates. **Provisional**: grid
-intensity is still an unsourced placeholder, so these are not yet quotable.
+Computed 2026-08-23 by `analysis/carbon_model.py` from the fleet pass energy
+measurements and the Phase 7 embodied estimates. **Provisional**: grid intensity
+is still an unsourced placeholder.
 
-Replacing a GTX 1080 Ti, CAISO grid at 0.200 kg CO2/kWh, six year horizon,
-current workload sizing only. The figure is the **active hours per year** the
-replacement must run before it repays its own manufacturing carbon.
+The pair that matters is **matmul, GTX 1080 Ti to RTX A4000**, 2017 hardware
+against 2021. The 1080 Ti to 2080 Ti pair is 2017 against 2018 and is not a
+retirement decision anyone faces; it is reported for completeness only.
 
-| Workload | Replacement | Embodied kg | Break-even active h/y | Share of a year |
-|---|---|---|---|---|
-| matmul | RTX A4000 | 5.7 to 14.6 | 29 to 75 | 0.3% to 0.9% |
-| matmul | RTX 2080 Ti | 9.5 to 26.7 | 71 to 200 | 0.8% to 2.3% |
-| resnet | RTX A4000 | 5.7 to 14.6 | 45 to 115 | 0.5% to 1.3% |
-| resnet | RTX 2080 Ti | 9.5 to 26.7 | 77 to 217 | 0.9% to 2.5% |
-| llm | RTX A4000 | 5.7 to 14.6 | 58 to 148 | 0.7% to 1.7% |
-| llm | RTX 2080 Ti | 9.5 to 26.7 | 126 to 355 | 1.4% to 4.1% |
+The figure below is **active hours per year** the replacement must run before it
+repays its own manufacturing carbon. CAISO at 0.200 kg CO2/kWh, six year
+horizon, grid held flat.
 
-Taken at face value this says replacement repays itself at under 5% utilisation
-in every case, which on a cluster where cards routinely run harder than that
-means "replace, more or less unconditionally". **That conclusion should not be
-reported yet**, for four reasons that all push the same way.
+### Stacking every bias that favours replacement
 
-### Four biases, all favouring replacement
+| Assumption | Embodied kg | Break-even h/y | Share of a year |
+|---|---|---|---|
+| As published (CPA 1.0 to 3.0, die+gddr) | 5.7 to 14.6 | 29 to 75 | 0.3% to 0.9% |
+| Node-differentiated CPA, 8nm at 2.5 to 3.0 | 12.4 to 14.6 | 64 to 75 | 0.7% to 0.9% |
+| Plus full-card BOM, x2 to x3 | 24.8 to 43.9 | 128 to 226 | 1.5% to 2.6% |
 
-1. **The embodied figure is a floor.** The die+gddr scope covers the die, its
-   packaging and the memory. A physically swapped card also carries a PCB, VRM
-   components, a heatsink and heatpipes, a fan, shroud and backplate,
-   connectors, assembly and transport. A real card is higher by an unquantified
-   margin, and every kilogram raises the threshold.
-2. **Carbon per area is swept uniformly across three process nodes**, 16nm,
-   12nm and 8nm, although `data/embodied/EMBODIED.md` notes that newer nodes
-   trend higher. The replacement cards are the newer ones, so their embodied
-   cost is the one being understated.
-3. **The replacement unit is the GPU, not the node.** Recorded under Gap 5. A
-   2017-era host's CPU, RAM and PSU are aged too, so on the oldest hardware a
-   card swap may not be the realistic move.
-4. **Grid intensity is held constant.** A decarbonising grid makes each future
-   year of savings worth less carbon than the one before, which pushes payback
-   out. CAISO at 0.200 is also the cleanest preset, and a cleaner grid makes
-   operational savings count for less, so this row is the least favourable to
-   replacement on that axis while being the most favourable on scope.
+**At the worst corner, every bias at its worst simultaneously, replacement still
+repays itself at 2.6% of a year of active use.**
+
+That is the headline, and it is a stronger claim than a conditional one:
+replacement pays back under every assumption we can currently defend. The
+remaining work on embodied carbon tightens the error bars; it does not decide
+the answer. `tests/test_carbon_model.py` pins this, so if a future change flips
+it the failure is the finding.
+
+### The five biases, and why the stack is the right test
+
+All five point the same way, toward replacement looking better than it is:
+
+1. **The embodied scope is a floor.** die+gddr covers the die, its packaging and
+   the memory. A swapped card also has a PCB, VRMs, heatsink and heatpipes, fan,
+   shroud, backplate, connectors, assembly and transport. Modelled above as a
+   x2 to x3 whole-card multiplier.
+2. **Carbon per area is swept uniformly across three process nodes.** This one
+   is load-bearing rather than a refinement. With CPA held constant, die area is
+   the only thing distinguishing the cards, and GA104 at 392 mm2 is smaller than
+   GP102 at 471 mm2, so the model hands the **replacement lower embodied carbon
+   than the card it replaces** (5.7 to 14.6 against 6.2 to 17.0). That is an
+   artifact of the uniform sweep, not a physical finding. Modelled above by
+   raising the 8nm band to 2.5 to 3.0.
+3. **Yield is a flat generic default.** ACT's 0.875 is applied to every die.
+   Yield falls superlinearly with area, so at 754 mm2 the 2080 Ti's true yield
+   is well below it. It matters only for the replacement card, since the old
+   card's embodied carbon is sunk, so it lands on the 2080 Ti column
+   specifically. Left at 0.875 for the A4000 above, where 392 mm2 makes it
+   defensible.
+4. **The replacement unit is the GPU, not the node.** A 2017-era host's CPU, RAM
+   and PSU are aged too, so a card swap may not be the realistic move on the
+   oldest hardware.
+5. **Grid intensity is held flat.** A decarbonising grid makes each future year
+   of savings worth less carbon than the last, pushing payback out.
 
 One bias runs the other way and is already accounted for: the reported energy is
 the trapezoidal integral, which understates the saving in all six pairs, so the
-thresholds above are conservative on the operational side.
+operational side is conservative.
 
-### What would change the conclusion
+### The low-high spread is a one-parameter sweep, not a confidence interval
 
-The result is far more sensitive to embodied carbon than to anything else. The
-old 50 to 400 kg placeholder gave thresholds of 238 to 2,042 active hours for
-the matmul A4000 pair; the measured 5.7 to 14.6 kg gives 29 to 75. That is the
-same model and the same energy data, moved by a factor of roughly 27 by the
-embodied input alone.
+**This needs stating wherever the range is quoted.** The spread comes from
+embodied carbon and nothing else. Once the idle term is suppressed the
+inequality is a division, so break-even hours scale exactly with embodied
+carbon: the published spread of 29 to 75 h/y is a ratio of 2.586, and the
+embodied band of 5.7 to 14.6 kg is a ratio of 2.561. They are the same number.
 
-So the honest statement today is conditional: **if** card-level embodied carbon
-really is of order 10 kg, replacement pays back at almost any utilisation. The
-work that would make it unconditional is a bill-of-materials estimate for a
-whole card, not more GPU time.
+Absent from the range entirely: grid intensity, PUE, the 6.43% same-model
+variance bound, and the integral-versus-counter disagreement of up to 7.72%.
+Reporting it as a confidence interval on the model would overstate what has been
+swept. Phase 9 is where the other axes enter.
+
+### Sensitivity, for Phase 9
+
+Embodied carbon dominates every other input. Moving it from the old unsourced
+50 to 400 kg placeholder to the measured 5.7 to 14.6 kg changed the matmul A4000
+threshold by a factor of roughly 27 on identical energy data. Nothing else in
+the model comes close: the entire choice of grid region spans 2.75x.

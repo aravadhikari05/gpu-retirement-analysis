@@ -946,20 +946,37 @@ measured estimates are an order of magnitude lower, roughly 6 to 27 kg per card.
 That is mostly scope, since the old figure was probably whole-system, but not
 only scope: see the floor caveat below.
 
-Three things about the new figures that change what may be claimed:
+Five things about the new figures that change what may be claimed. All five
+point the same way, toward replacement looking better than it is:
 
 - **They are a floor, not a card.** The die+gddr scope covers the die, its
   packaging and the memory. A physically swapped card also has a PCB, VRMs, a
   heatsink and heatpipes, a fan, shroud, backplate, connectors, assembly and
   transport. None of that is counted, so a real card is higher.
-- **The bias direction stacks.** Understating the replacement's embodied carbon
-  makes replacement look better. So does the GPU-only scope decision, and so
-  does the note under "How NRP actually acquires hardware" that a 2017-era
-  node's CPU, RAM and PSU are aged too. Three biases, all the same way.
-- **Carbon-per-area is swept uniformly across three process nodes**, 16nm,
-  12nm and 8nm, although `EMBODIED.md` notes newer nodes trend higher. That
-  understates the newest card, which is the replacement, so it points the same
-  way as the other two. Node-differentiated CPA is open work.
+- **Carbon-per-area is swept uniformly across three process nodes**, 16nm, 12nm
+  and 8nm, although `EMBODIED.md` notes newer nodes trend higher. **This one is
+  load-bearing, not a refinement.** With CPA held constant, die area is the only
+  thing separating the cards, and GA104 at 392 mm2 is smaller than GP102 at
+  471 mm2, so the model hands the **replacement lower embodied carbon than the
+  card it replaces**, 5.7 to 14.6 against 6.2 to 17.0. That is an artifact of
+  the uniform sweep, not a physical finding. Node-differentiated CPA is the
+  highest-value open ask of Phase 7.
+- **Yield is a flat generic default.** ACT's 0.875 is applied to every die, but
+  yield falls superlinearly with area, so at 754 mm2 the 2080 Ti's true yield is
+  well below it. It matters only for the replacement card, since the old card's
+  embodied carbon is sunk, so it lands on the 2080 Ti column specifically.
+- **The replacement unit is the GPU, not the node.** See "How NRP actually
+  acquires hardware": a 2017-era node's CPU, RAM and PSU are aged too.
+- **Grid intensity is held flat**, while a decarbonising grid makes each future
+  year of savings worth less than the last.
+
+**The conclusion survives all five at once.** Stacking node CPA at the 8nm
+ceiling, a full-card BOM multiplier of 3, ACT yield and a flat grid puts the
+matmul 1080 Ti to A4000 break-even at 226 active hours per year, 2.6% of a year.
+So replacement pays back under every assumption currently defensible, and the
+remaining embodied work tightens error bars rather than deciding the answer.
+`tests/test_carbon_model.py` pins that, so a future change that flips it fails
+loudly. Full table in `paper/methods-notes.md`.
 
 Grid intensity presets remain unsourced placeholders, kg CO2 per kWh: CAISO
 approx 0.200, US national average approx 0.390, ERCOT approx 0.400, PJM approx
@@ -1002,6 +1019,14 @@ Embodied estimates are read from `data/embodied/` via `load_embodied()`, keyed
 on a normalised model name because Phase 7 writes the hyphenated Kubernetes
 label while the energy table carries the NVML name. Joining the raw strings
 matches nothing and reads as "no pairs found" rather than as a bug.
+
+**The low-high spread this model reports is a one-parameter sweep on embodied
+carbon, not a confidence interval.** Once the idle term is suppressed the
+inequality is a division, so break-even hours scale exactly with embodied: the
+29 to 75 h/y spread is a ratio of 2.586 and the 5.7 to 14.6 kg band is 2.561,
+the same number. Grid intensity, PUE, the 6.43% variance bound and the
+integral-versus-counter disagreement are all absent from it. Say so wherever the
+range is quoted; Phase 9 is where the other axes enter.
 
 **A job is one `inner_iter`**, which is what `energy_j_per_inner_iter` holds.
 **Gap 4 is resolved in the signature**: `horizon_years=None` reproduces the
