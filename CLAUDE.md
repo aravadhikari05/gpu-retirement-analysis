@@ -570,12 +570,12 @@ whose rows disagree on `work_hash` is **refused rather than averaged**, and
 `n_physical_gpus` is reported next to `n_runs` so a standard deviation from one
 card is not read as fleet variation.
 
-Still open for Veda and Aidan: whether `llm_inference.py` should adopt
-`inner_iters` when the repetition-inside-the-timed-region change from
-`docs/tasks/phase3-workload-sizing.md` is implemented. It currently runs one
-`generate()` per timed region, and as of 2026-08-23 reports `inner_iters=1`,
-which is the honest value for a single decode rather than a placeholder. The
-enforcement below is what made the choice explicit instead of a missing column.
+**Settled 2026-08-23: llm adopts `inner_iters`, default 8.** It now runs 8
+identical `generate()` calls inside the timed region, the same
+repetition-inside-the-timed-region design matmul and resnet already use, and
+`config_id` carries `i{inner_iters}` so a 1 iteration run can never be pooled
+with an 8 iteration one. All three workloads now report a real `inner_iters`.
+Rationale and the reason not to retune it are in `docs/tasks/phase3-llm-inference.md`.
 
 ### The record schema is convention, not enforcement, and it drifted
 
@@ -1035,12 +1035,11 @@ million while still looking plausible.
 
 ### Unclaimed side work, no ordering
 
-- **LLM `inner_iters`.** `llm_inference.py` runs one `generate()` per timed
-  region and reports `inner_iters=1` as of 2026-08-23, which the record contract
-  forced to be an explicit choice rather than a missing column. Whether it
-  adopts the repetition-inside-the-timed-region design is still open for Veda
-  and Aidan, and ties to Workload sizing. It is also the only workload with no
-  measured sizing constant, since the 3090 figures cover matmul and resnet only.
+- **LLM `inner_iters`: closed 2026-08-23.** Set to 8, chosen from the measured
+  L40S runtime plus margin rather than from a 3090 measurement, since no 3090
+  could be obtained. It remains the one sizing constant that is an estimate: if a
+  3090 later shows slack, **do not retune it down**, because the headroom is the
+  insurance and a change to `inner_iters` changes `config_id` and forces a re-run.
 - **ruff config.** No `pyproject.toml` or `ruff.toml`, so `ruff check` enforces
   only defaults, not the type-hint, docstring or naming rules in Coding
   conventions. Adding one that actually checks them is unclaimed.
