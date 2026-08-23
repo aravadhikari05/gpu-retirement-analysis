@@ -326,6 +326,57 @@ class Curve(unittest.TestCase):
             with self.assertRaises(ValueError):
                 payback_curve(PLACEHOLDER, MATMUL_1080TI, MATMUL_A4000, CAISO, (bad,))
 
+    def test_no_payback_entry_keeps_the_flags_break_even_jobs_would_give(self):
+        # Regression. An earlier version built the no-payback answer by hand with
+        # interpretable=True and an empty note list, so a pair that
+        # break_even_jobs correctly refused came back from here claiming to be
+        # interpretable, with the PROVISIONAL marker dropped.
+        near = CardEnergy(
+            gpu_model="twin",
+            benchmark="matmul",
+            config_id=MATMUL_1080TI.config_id,
+            energy_j_per_job=MATMUL_1080TI.energy_j_per_job * 0.99,
+            runtime_s_per_job=MATMUL_1080TI.runtime_s_per_job,
+            idle_w=MATMUL_1080TI.idle_w,
+            n_runs=5,
+            n_physical_gpus=2,
+            work_hash=MATMUL_1080TI.work_hash,
+        )
+        direct = break_even_jobs(
+            PLACEHOLDER, MATMUL_1080TI, near, CAISO, horizon_years=10
+        )
+        ((_, curved),) = payback_curve(PLACEHOLDER, MATMUL_1080TI, near, CAISO, (0.01,))
+        self.assertIsNone(curved.jobs, "this pair should not pay back at 1%")
+        self.assertEqual(curved.interpretable, direct.interpretable)
+        self.assertEqual(curved.provisional, direct.provisional)
+        self.assertFalse(curved.interpretable)
+        self.assertTrue(any(n.startswith("PROVISIONAL") for n in curved.notes))
+        self.assertTrue(any("does not pay back" in n for n in curved.notes))
+
+    def test_no_payback_entry_still_reports_its_utilisation(self):
+        ((_, curved),) = payback_curve(
+            PLACEHOLDER, MATMUL_1080TI, MATMUL_A4000, CAISO, (0.001,), max_years=1
+        )
+        self.assertIsNotNone(curved.active_hours_per_year)
+
+    def test_high_estimate_never_pays_back_sooner(self):
+        spread = EmbodiedEstimate(
+            gpu_model="NVIDIA RTX A4000", low_kg=50.0, high_kg=400.0, sourced=False
+        )
+        low = payback_curve(spread, MATMUL_1080TI, MATMUL_A4000, CAISO, (0.5,))
+        high = payback_curve(
+            spread,
+            MATMUL_1080TI,
+            MATMUL_A4000,
+            CAISO,
+            (0.5,),
+            use_high_estimate=True,
+        )
+        low_years = low[0][1].years_at_utilisation
+        high_years = high[0][1].years_at_utilisation
+        if low_years is not None and high_years is not None:
+            self.assertGreaterEqual(high_years, low_years)
+
     def test_curve_returns_one_entry_per_utilisation(self):
         utilisations = (0.1, 0.4, 0.9)
         curve = payback_curve(

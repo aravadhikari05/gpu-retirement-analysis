@@ -646,6 +646,7 @@ def payback_curve(
     grid: GridIntensity,
     utilisations: tuple[float, ...],
     max_years: int = 10,
+    use_high_estimate: bool = False,
 ) -> list[tuple[float, BreakEven]]:
     """Years to payback across a range of utilisations.
 
@@ -659,9 +660,14 @@ def payback_curve(
       grid: Region and decline rate.
       utilisations: Fractions of the year the card is active, each in (0, 1].
       max_years: Longest horizon to search before declaring no payback.
+      use_high_estimate: Take the high end of the embodied range. Phase 9 runs
+        the curve at both ends, so it has to be reachable here rather than only
+        on break_even_jobs.
 
     Returns:
-      List of (utilisation, BreakEven), one per input utilisation.
+      List of (utilisation, BreakEven), one per input utilisation. Every entry
+      carries the same provenance and interpretability flags break_even_jobs
+      would return for the same inputs, whether or not it pays back.
 
     Raises:
       ValueError: If a utilisation is outside (0, 1].
@@ -674,14 +680,43 @@ def payback_curve(
     for u in utilisations:
         active_hours = u * HOURS_PER_YEAR
         jobs_per_year = active_hours * 3600.0 / new.runtime_s_per_job
-        answer = _never(
-            not (embodied.sourced and grid.sourced), True, [], old, new, None
+
+        # The no-payback answer is derived from a real evaluation at the longest
+        # horizon rather than assembled by hand. An earlier version built it with
+        # interpretable=True and an empty note list, so a pair that
+        # break_even_jobs correctly refused came back from here claiming to be
+        # interpretable, with the PROVISIONAL marker dropped. Every field a
+        # caller reads has to come from the same place the answer does.
+        longest = break_even_jobs(
+            embodied,
+            old,
+            new,
+            grid,
+            horizon_years=max_years,
+            use_high_estimate=use_high_estimate,
         )
+        answer = BreakEven(
+            jobs=None,
+            years_at_utilisation=None,
+            active_hours_per_year=active_hours,
+            provisional=longest.provisional,
+            interpretable=longest.interpretable,
+            notes=longest.notes
+            + (f"does not pay back within {max_years} y at {u:.0%} utilisation",),
+        )
+
         # Smallest whole-year horizon at which this utilisation repays. Searched
         # rather than solved because the declining grid makes each extra year
         # worth less than the last, so there is no closed form.
         for years in range(1, max_years + 1):
-            candidate = break_even_jobs(embodied, old, new, grid, horizon_years=years)
+            candidate = break_even_jobs(
+                embodied,
+                old,
+                new,
+                grid,
+                horizon_years=years,
+                use_high_estimate=use_high_estimate,
+            )
             if candidate.jobs is not None and candidate.jobs <= jobs_per_year * years:
                 answer = BreakEven(
                     jobs=candidate.jobs,
@@ -722,9 +757,18 @@ def main() -> None:
     parser.add_argument(
         "--embodied-kg",
         type=float,
-        default=100.0,
-        help="embodied carbon of the replacement card. UNSOURCED placeholder; "
-        "Phase 7 supplies the real range.",
+        default=50.0,
+        help="low end of the embodied carbon range for the replacement card. "
+        "UNSOURCED placeholder; Phase 7 supplies the real range.",
+    )
+    parser.add_argument(
+        "--embodied-high-kg",
+        type=float,
+        default=None,
+        help="high end of the embodied range. Defaults to the low end, which "
+        "makes it a point value. Ranges are the repo convention: the placeholder "
+        "50 to 400 kg spans 8x in the answer, so a single number hides most of "
+        "the uncertainty.",
     )
     parser.add_argument(
         "--horizon-years",
@@ -768,11 +812,23 @@ def main() -> None:
         logger.warning("no comparable pairs in %s", args.energy_table)
         return
 
+    high_kg = args.embodied_high_kg
+    if high_kg is None:
+        high_kg = args.embodied_kg
+    if high_kg < args.embodied_kg:
+        parser.error(
+            f"--embodied-high-kg {high_kg} is below --embodied-kg {args.embodied_kg}"
+        )
+    is_range = high_kg > args.embodied_kg
+
     horizon = None if args.snapshot else args.horizon_years
+    embodied_label = (
+        f"{args.embodied_kg} to {high_kg} kg" if is_range else f"{args.embodied_kg} kg"
+    )
     print(
         f"grid={grid.name} {grid.kg_co2_per_kwh} kg/kWh "
         f"decline={grid.annual_decline:.1%}/y  "
-        f"embodied={args.embodied_kg} kg  "
+        f"embodied={embodied_label}  "
         f"horizon={'snapshot' if horizon is None else str(horizon) + ' y'}"
     )
     print()
@@ -781,24 +837,47 @@ def main() -> None:
         embodied = EmbodiedEstimate(
             gpu_model=new.gpu_model,
             low_kg=args.embodied_kg,
-            high_kg=args.embodied_kg,
+            high_kg=high_kg,
             sourced=False,
         )
-        answer = break_even_jobs(embodied, old, new, grid, horizon_years=horizon)
-        tag = "PROVISIONAL" if answer.provisional else "sourced"
-        label = f"{old.benchmark}: {old.gpu_model} -> {new.gpu_model}"
-        if answer.jobs is None:
-            print(f"[{tag}] {label}: never pays back")
-        else:
-            hours = (
-                f", {answer.active_hours_per_year:,.0f} active h/y"
-                if answer.active_hours_per_year is not None
-                else ""
+        # Both ends when a range was given. The low end is the most favourable
+        # case for replacement, so "does not pay back" at the low end is the
+        # robust result, and the spread between the two is what Phase 7's
+        # sourcing has to narrow.
+        low_answer = break_even_jobs(embodied, old, new, grid, horizon_years=horizon)
+        answers = [("low", low_answer)]
+        if is_range:
+            answers.append(
+                (
+                    "high",
+                    break_even_jobs(
+                        embodied,
+                        old,
+                        new,
+                        grid,
+                        horizon_years=horizon,
+                        use_high_estimate=True,
+                    ),
+                )
             )
-            print(f"[{tag}] {label}: {answer.jobs:,.0f} jobs{hours}")
-        if not answer.interpretable:
+
+        tag = "PROVISIONAL" if low_answer.provisional else "sourced"
+        label = f"{old.benchmark}: {old.gpu_model} -> {new.gpu_model}"
+        print(f"[{tag}] {label}")
+        for end, answer in answers:
+            prefix = f"    {end + ' embodied:':<16}" if is_range else "    "
+            if answer.jobs is None:
+                print(f"{prefix}never pays back")
+            else:
+                hours = (
+                    f", {answer.active_hours_per_year:,.0f} active h/y"
+                    if answer.active_hours_per_year is not None
+                    else ""
+                )
+                print(f"{prefix}{answer.jobs:,.0f} jobs{hours}")
+        if not low_answer.interpretable:
             print("    NOT INTERPRETABLE")
-        for note in answer.notes:
+        for note in low_answer.notes:
             print(f"    - {note}")
         print()
 

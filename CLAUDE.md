@@ -981,8 +981,9 @@ limitation.
 Core inequality as originally written:
 `embodied_new < (energy_per_job_old - energy_per_job_new) * expected_jobs * grid_intensity`.
 
-Planned entry points in `analysis/carbon_model.py`: `break_even_jobs`,
-`break_even_hours_per_year`, `payback_curve`.
+Entry points in `analysis/carbon_model.py`, all implemented: `break_even_jobs`,
+`break_even_hours_per_year`, `payback_curve`. `payback_curve` is the primitive
+Phase 9 sweeps and Phase 10 plots; this module sweeps nothing and draws nothing.
 
 **Do not implement this inequality as written without reading
 `docs/tasks/phase8-break-even-inputs.md` first.** It walks the equation term by
@@ -1136,7 +1137,7 @@ Phase numbers follow `docs/phases.md`.
 | 5 Storage | **Done** (Veda, 2026-08-20, `2dc4e7e`) | `k8s/benchmark-pod.yaml` is a real templated pod: both PVCs mounted, `NODE_NAME` / `IMAGE_REF` / `GIT_COMMIT` env, `HF_HOME=/models/hf`, `HF_HUB_OFFLINE=1`, `nodeSelector` on `nvidia.com/gpu.product`, args matching the runner CLI. `k8s/results-pvc.yaml` is the canonical results claim (live name `matmul-results`) and `k8s/STORAGE.md` documents the volume layout. |
 | 6 Sweep | **First fleet pass done, 2026-08-23** | 3 cards (1080 Ti, 2080 Ti, A4000) x 3 workloads x 5 repetitions, 50 analysable rows in `data/raw/runs/runs.jsonl`, selected by `analysis/fleet_subset.py` into `data/processed/fleet_runs.{jsonl,csv}`. No 3090, by decision. Every gate passed. Two things it is not: the framing is still unconfirmed with the prof, and same-model variance is measured for exactly one card pair, so cross-model differences below about 6% are not interpretable. |
 | 7 Embodied carbon | **Not started, and now the critical path** | Every figure is an unsourced placeholder. Blocks Phase 8. The energy side is done, so this is the only thing between the project and a break-even number. |
-| 8 Carbon model | Scoped, not built | `analysis/summarize_runs.py` and `analysis/fleet_subset.py` prepare the input tables. `carbon_model.py` does not exist; its required inputs are reviewed in `docs/tasks/phase8-break-even-inputs.md`. |
+| 8 Carbon model | **Built, blocked on Phase 7 for a number** | `analysis/summarize_runs.py` and `analysis/fleet_subset.py` prepare the input tables. `analysis/carbon_model.py` and `analysis/grid_intensity.py` exist, with `tests/test_carbon_model.py` covering them. Every embodied and grid figure is still an unsourced placeholder, so output is labelled provisional and the CLI refuses to print without `--allow-unsourced`. Gaps reviewed in `docs/tasks/phase8-break-even-inputs.md`. |
 | 9 to 10 | Not started | `paper/methods-notes.md` already holds real measured content. |
 
 GPU workloads are no longer restricted. The earlier "read-only census, do not
