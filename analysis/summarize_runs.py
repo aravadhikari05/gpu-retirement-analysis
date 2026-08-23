@@ -31,6 +31,12 @@ import statistics
 
 logger = logging.getLogger(__name__)
 
+# The runner writes into a per-run directory alongside the power traces, not to
+# the top of data/raw/. This default pointed at data/raw/runs.jsonl, which has
+# never existed, so anyone running the module without --runs got a bare
+# FileNotFoundError rather than a table.
+DEFAULT_RUNS = "data/raw/runs/runs.jsonl"
+
 # Shared columns, present for every workload. Workload-specific fields stay in
 # the JSONL and are deliberately not flattened here; add them to a purpose-built
 # table instead of widening this one until it goes sparse.
@@ -266,7 +272,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Derive summary tables from runs.jsonl"
     )
-    parser.add_argument("--runs", default="data/raw/runs.jsonl")
+    parser.add_argument("--runs", default=DEFAULT_RUNS)
     parser.add_argument("--flat-out", default="data/processed/runs_flat.csv")
     parser.add_argument("--agg-out", default="data/processed/energy_by_gpu.csv")
     args = parser.parse_args()
