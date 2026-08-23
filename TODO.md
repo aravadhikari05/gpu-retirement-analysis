@@ -234,23 +234,29 @@ rests almost entirely on active hours. Corrected in `CLAUDE.md`,
 Genuinely unmeasured, if anyone wants it: idle on the specific `k8s-gpu-2` card,
 and idle on the L4 and 3090 at all. Neither blocks anything.
 
-### The 1080 Ti disagrees with itself on resnet only
+### The 1080 Ti resnet gap: DIAGNOSED 2026-08-23, sampling aliasing
 
-Integral against NVML energy counter, same card, same pod, same session: matmul
-agrees to 0.08% and llm to 0.75%, while resnet swings from -0.74% to -7.72%.
-The counter is stable across repetitions while the integral is the noisy term,
-and the 1080 Ti resnet energy standard deviation is 5.2% against roughly 0.3%
-everywhere else.
+`PowerMonitor` samples every 0.2 s; resnet on the 1080 Ti runs 1000 batches in
+about 202 s, or 0.201 s per batch. Sampler and workload share a period, so every
+sample lands at nearly the same phase of each batch and the bias never averages
+out. Full evidence in `CLAUDE.md` under Measurement contract. It is the only one
+of nine workload-and-card pairs with a period ratio near 1.0, and it is the only
+one with the anomaly.
 
-Ruled out: cached readings (distinct-to-sample ratio 0.99) and coarse
-quantisation. Leading hypothesis is that the 0.2 s sampling interval aliases
-resnet's spiky per-batch power trace on this card, where matmul's flat sustained
-load samples cleanly.
+**Consequence for results: use `energy_j_counter` for 1080 Ti resnet.** A
+hardware accumulator cannot alias. Nothing else is affected: every other pair
+agrees to well under 1% apart from the 2080 Ti's separate per-card bias below.
 
-**Do not report 1080 Ti resnet energy without saying which of the two figures
-was used and why.** If the fix is a shorter sampling interval, that is a code
-change in `measurement/power_monitor.py` and a new image digest, which would
-separate any re-run from the existing 50 rows.
+**Left deliberately undone:** changing the sampling interval. 0.2 s is a poor
+default because it is close to a plausible per-batch time for image training on
+mid-range cards. A less round or dithered value would fix it, but it changes
+`measurement/power_monitor.py` and therefore the image digest, which separates
+any re-run from the existing 50 rows. Worth doing before any future sweep, not
+worth invalidating this one over.
+
+**Worth a paragraph in methods.** This is a different instrument failure from
+Yang et al. (2024), who document cached readings. Both were detectable only
+because the full sample trace is retained.
 
 ### The 2080 Ti energy counter bias
 

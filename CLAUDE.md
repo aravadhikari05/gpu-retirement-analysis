@@ -305,18 +305,46 @@ and a 60 s preflight window, clustered tightly at 5.6 to 6.9%. It is a
 systematic per-card bias, not a method problem, and which of the two figures to
 trust on Turing is still an open question the paper has to address.
 
-**New and unexplained: the 1080 Ti disagrees on resnet only.** Same card, same
-pod, same session: matmul agrees to 0.08% and llm to 0.75%, while resnet swings
-from -0.74% to -7.72%. The counter is stable across repetitions (41.6 to
-44.0 kJ) while the integral is the noisy term (38.4 to 43.7 kJ), and the 1080 Ti
-resnet energy standard deviation is 5.2% against roughly 0.3% everywhere else.
-Ruled out: cached readings (distinct-to-sample ratio 0.99) and coarse
-quantisation. The leading hypothesis is that 0.2 s sampling aliases resnet's
-spiky per-batch power trace on this card, where matmul's flat sustained load
-samples cleanly. **Unresolved. Do not report 1080 Ti resnet energy without
-saying which of the two figures was used and why.** If the fix is a shorter
-sampling interval, that is a code change and a new image digest, which would
-separate any re-run from these 50 rows.
+**Diagnosed 2026-08-23: the 1080 Ti resnet gap is sampling aliasing, not a card
+defect.** `PowerMonitor` samples every 0.2 s. resnet on the 1080 Ti runs 1000
+batches in about 202 s, which is **0.201 s per batch**. Sampler period and
+workload period coincide, so every sample lands at nearly the same phase of each
+batch and the mean reflects that phase rather than the cycle average. It does not
+wash out over the run.
+
+Evidence, in order of strength:
+
+1. **It is the only combination where the periods match.** Across all nine
+   workload-and-card pairs the per-iteration period divided by the 0.2 s interval
+   is 1.005 for 1080 Ti resnet and either at or below 0.81, or at or above 117,
+   for every other pair. One ratio near unity, one anomaly, same row.
+2. **The per-repetition scatter predicts itself.** The deviation tracks how many
+   beat cycles the sampler completes per run, that is how thoroughly it walks
+   through phase: 43 beats gives -0.74%, 17 beats gives -7.72%. Pearson r is
+   +0.873 over the six repetitions. This is also why the first repetition looked
+   clean, its runtime was 197.3 s against 202 to 203 s for the rest.
+3. **Everything else is excluded.** No cached readings, 975 or more distinct
+   values per 1000 samples with a longest identical run of 2. No lost samples,
+   zero gaps above 1 s at a mean interval of 0.206 s. The counter is stable at
+   205.2 to 206.1 W across repetitions 2 to 5 while the sampled mean climbs from
+   189.8 to 198.9 W.
+
+**The counter is right and the integral is biased here.** A hardware accumulator
+cannot alias. For 1080 Ti resnet, use `energy_j_counter`.
+
+**0.2 s is a bad default interval** and the roundness is what makes it dangerous:
+it sits close to a plausible per-batch time for image training on mid-range
+cards, which is precisely where it collides. A less round value, or a dithered
+interval, would avoid locking to any workload period. Changing it means changing
+`measurement/power_monitor.py` and therefore the image digest, which separates
+any re-run from these 50 rows.
+
+Note this is a **different failure mode from Yang et al. (2024)**, who document
+cached readings. Both are detectable only because the full sample trace is
+retained, which is the second time that design decision has paid for itself.
+
+This also settles that the 2080 Ti's bias is unrelated: it appears at period
+ratios of 0.51, 0.70 and 117 alike, so it is not aliasing.
 
 Still unverified on every other GPU model.
 
