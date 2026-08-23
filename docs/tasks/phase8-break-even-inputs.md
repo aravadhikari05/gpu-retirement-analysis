@@ -181,9 +181,20 @@ integral form down rather than a missing input.
 - Replacing a card inside an existing node has GPU-only embodied cost.
 - Replacing a node has whole-system embodied cost, including CPU, RAM, PSU and
   chassis.
-- Vendor product carbon footprint reports, which CLAUDE.md names as a source,
-  are **whole-system** figures. Working backwards from them to a GPU-only number
-  is itself a modelling assumption with its own error bars.
+- Vendor product carbon footprint reports are **whole-system** figures.
+
+**Resolved 2026-08-23: the unit is the GPU, and the embodied figure comes from
+ACT bottom-up.** `data/embodied/` holds it. ACT takes die area and process node
+and returns kg CO2e per card, so no whole-system number enters the calculation
+at any point.
+
+**The "work backwards from vendor PCF reports" instruction is withdrawn.** A
+node total is roughly 1000 kg and a card is 6 to 27 kg, so the GPU is 1 to 3% of
+the total and a 5% error on the system figure is over 3x the answer. EcoServe
+(Li et al., 2025) does not subtract either: it uses ACT for dies and takes
+per-component coefficients from the Dell R740 LCA for what ACT does not model.
+Whole-system figures keep one use, the Phase 9 node-scope arm, where a total is
+used directly as a total.
 
 Related: the model assumes a retired card stops existing. In practice Nautilus
 runs donated hardware, and a card retired here may be redeployed elsewhere
@@ -232,12 +243,12 @@ end to end.
 
 ## Status of every input number
 
-**No carbon or grid figure in this project is sourced yet.** From CLAUDE.md, all
-currently placeholders inherited from a spec draft with no citation:
+**Updated 2026-08-23. The embodied side is now sourced; grid intensity is not.**
 
 | Input | Current value | Status |
 |---|---|---|
-| Embodied per GPU | 50 to 400 kg CO2e | unsourced |
+| Embodied per GPU, card level | 5.7 to 26.7 kg CO2e depending on card | **sourced**, ACT bottom-up, `data/embodied/`. Every constant checked against the ACT paper and reference implementation; two deviations recorded in `CLAUDE.md` |
+| GDDR embodied intensity | 0.065 kg CO2e per GB | sourced (LLMCarbon), but **contested**: EcoServe Table I says 0.36 for GDDR6. Kept, reported as a sensitivity |
 | CAISO grid intensity | approx 0.200 kg CO2/kWh | unsourced |
 | US national average | approx 0.390 | unsourced |
 | ERCOT | approx 0.400 | unsourced |

@@ -116,7 +116,7 @@ Proficient
 
 Phase 7: Gather Embodied Carbon Estimates (Weeks 5–6)
 What: Collect manufacturing carbon estimates for each GPU generation from published literature.
-How: Use Harvard's ACT model (Gupta et al., 2022) and vendor product carbon footprint reports (Dell, HP, Lenovo). These are estimates, not exact numbers — nobody publishes per-chip manufacturing emissions.
+How: Use Harvard's ACT model (Gupta et al., 2022), bottom-up from die area and process node. These are estimates, not exact numbers; nobody publishes per-chip manufacturing emissions. DONE 2026-08-23, see `data/embodied/`. Note: this line previously also named vendor product carbon footprint reports (Dell, HP, Lenovo) as a source to work backwards from. That is withdrawn. ACT yields the per-GPU figure directly, and subtracting a card out of a ~1000 kg whole-system total cannot recover a 6 to 27 kg quantity. See `CLAUDE.md` under "Vendor PCF reports are not a source here".
 Critical design rule: Present ranges, not point estimates. Honest uncertainty is more defensible than false precision.
 
 Skills needed:

@@ -20,6 +20,10 @@ repetitions each on three GPUs (GTX 1080 Ti, RTX 2080 Ti, RTX A4000) on
 2026-08-23, with power scoped to the timed region and idle power recorded.
 Every gate passed. 50 analysable rows.
 
+Phase 7 landed on 2026-08-23 (Veda, `b98dbe1`), so **both sides of the break-even
+inequality now have numbers** and `analysis/carbon_model.py` is the critical
+path.
+
 **Nothing below is blocked on more GPU time.** The critical path is desk work.
 
 Data:
@@ -30,6 +34,7 @@ Data:
 | Power traces, one CSV per repetition | `data/raw/runs/{matmul,resnet_train,llm_inference}/` |
 | The analysable slice, 50 rows | `data/processed/fleet_runs.{jsonl,csv}` |
 | Per-repetition and per-group summaries | `data/processed/runs_flat.csv`, `energy_by_gpu.csv` |
+| Embodied carbon per card, low-high | `data/embodied/embodied_carbon_cardlevel.csv` |
 
 Regenerate both derived sets from the raw file. Neither is edited by hand:
 
@@ -68,9 +73,7 @@ here only because they change what later work is allowed to claim:
 ### 1. Replacement unit: DECIDED, the GPU (2026-08-23)
 
 **Gap 5 of `docs/tasks/phase8-break-even-inputs.md`.** Is the thing being
-replaced a GPU inside an existing node, or a whole node? Vendor product carbon
-footprint reports are whole-system, so a GPU-only figure has to be worked
-backwards from them, which is a modelling assumption with its own error bars.
+replaced a GPU inside an existing node, or a whole node?
 
 This decision determines **which numbers Phase 7 goes and sources**, so making
 it afterwards means sourcing twice.
@@ -92,15 +95,25 @@ Three reasons, all grounded in what the project actually measured:
 3. **It matches the question.** "Is this old card worth replacing" rather than
    "is this old server worth replacing."
 
-What accepting it costs, and what therefore has to be stated in methods:
+**The embodied number comes from ACT bottom-up, and that is the whole method.**
+ACT takes die area and process node and returns kg CO2e, which is `embodied_new`
+directly. No whole-system figure is involved at any step.
 
-- Vendor PCF reports are whole-system, so a GPU-only figure is worked backwards
-  from them. That subtraction is a modelling assumption with its own error bars,
-  stacked on the report's. The ACT model builds up from die size instead and is
-  naturally GPU-shaped, so prefer it where the die-level inputs exist and use
-  PCF reports as a cross-check rather than the primary source.
+**The instruction to work backwards from vendor PCF reports is withdrawn.** It
+came from the original spec draft and the arithmetic does not survive: a node
+total is roughly 1000 kg against 6 to 27 kg for a card, so a 5% error on the
+system figure exceeds the answer threefold. `CLAUDE.md` carries the detail under
+"Vendor PCF reports are not a source here". Whole-system numbers have one use
+left, the Phase 9 node-scope arm, where a total is used as a total.
+
+What accepting the GPU unit costs, and what therefore has to be stated in
+methods:
+
 - Host energy is excluded on the operational side, which understates the slower
   card. Known direction, so state it.
+- **Published precedent exists.** EcoServe (Li et al., 2025) refreshes GPUs on a
+  3-year cycle against 10-year hosts and reports approx 16% cumulative carbon
+  saving over a decade. Cite it; the unit is no longer only our assumption.
 
 **Checked against NRP's documentation 2026-08-23, and the decision stands with
 its reasoning changed.** Contribution to NRP is **node-level**: contributors
@@ -127,32 +140,98 @@ case its remaining operational carbon moves rather than disappears; and
 end-of-life and disposal carbon is absent from the model entirely, though it is
 usually small next to manufacturing.
 
-### 2. Phase 7: embodied carbon (unblocked, blocks items 3 and 4)
+### 2. Phase 7: embodied carbon: FIRST PASS DONE (Veda, 2026-08-23, `b98dbe1`)
 
-Owner doc: `docs/phases.md` (weeks 5 to 6). Placeholder figures and the sources
-to work from are in `CLAUDE.md` under Embodied carbon and grid intensity.
+`data/embodied/` holds it: `embodied_carbon.py`, `EMBODIED.md` with every input
+cited, and card-level and die-only CSVs. Card-level kg CO2e, die plus GDDR:
+1080 Ti 6.2 to 17.0, 2080 Ti 9.5 to 26.7, A4000 5.7 to 14.6. Method is the ACT
+area model with CPA swept 1.0 to 3.0 kg per cm2, which is where the band comes
+from. Figures and the full reasoning are in `CLAUDE.md` under Embodied carbon.
 
-Produce a per-GPU embodied carbon estimate for at least the **GTX 1080 Ti, RTX
-2080 Ti and RTX A4000**, from the ACT model (Gupta et al., 2022), vendor PCF
-reports, and die sizes.
+Verified 2026-08-23: running the script regenerates both committed CSVs
+byte-identical. **The 50 to 400 kg placeholder is withdrawn**, and the new
+figures are an order of magnitude lower by scope rather than by error.
 
-- **Ranges, not point values.** Honest uncertainty beats false precision.
-- **Every current figure in `CLAUDE.md` is an unsourced placeholder.** Treat the
-  50 to 400 kg CO2e range as a starting hypothesis, not evidence, and cite each
-  number individually in the style `paper/methods-notes.md` used for memory
-  bandwidth.
-- Never present an estimated number as measured. This is a hard rule.
+**This is the embodied number. Do not look for a second method.** ACT is
+bottom-up, so it yields `embodied_new` directly and no vendor whole-system
+figure or subtraction is needed. That instruction is withdrawn everywhere; see
+item 1 and `CLAUDE.md`.
 
-This is the single thing standing between the project and a break-even number.
-It needs no cluster access.
+**Every constant is sourced, checked 2026-08-23** against the ACT paper and
+against ACT's reference implementation at
+<https://github.com/facebookresearch/ACT>. Two of them are only in the code:
+`DEFAULT_FAB_YIELD = 0.875` and `CARBON_PER_IC_PACKAGE = 150 * g`, both in
+`act/core/common.py`. Cite the implementation for those, not the paper's
+Table 1, which gives yield only as a 0 to 1 range. Full table in `CLAUDE.md`
+under Embodied carbon.
 
-### 3. Phase 8: the carbon model
+**Two deviations from stock ACT, both conservative, both must reach methods.**
+Evaluating ACT's own per-node parameters gives CPA of 0.84 to 1.76 kg/cm2 at
+14nm and 0.90 to 2.06 at 8nm, against the 1.0 to 3.0 swept here; and ACT's CPA
+already contains `1/Y`, while `embodied_carbon.py` divides by yield again, which
+inflates by about 14% **if** Malmodin's figure is yield-inclusive. That last one
+is unverified and needs the primary source. Both push embodied carbon up, so
+payback is overstated rather than understated, and every conclusion holds under
+either. Also worth knowing: ACT tabulates no 16nm or 12nm node, so the 1080 Ti
+and 2080 Ti use 14nm as a proxy.
+
+Items 3 and 4 are unblocked.
+
+Three residuals, none blocking, all cheap:
+
+- **Grid intensity is still unsourced.** CAISO 0.200, US average 0.390, ERCOT
+  0.400, PJM 0.550 came from the same uncited spec draft and Phase 7 did not
+  touch them. Phase 9 projects them forward, so they need real citations.
+  **This is now the last unsourced input in the model**, since the embodied side
+  is fully cited.
+- **The memory coefficient is contested, not unsourced.** Ours is 0.065 kg per
+  GB (LLMCarbon); EcoServe Table I puts GDDR6 at 0.36 (TechInsights), with its
+  DDR4, HBM2 and HBM3e all in the 0.24 to 0.36 band. Both sit inside ACT's
+  `E_DRAM` range of 0 to 0.6, so ACT does not settle it. Decision 2026-08-23:
+  **keep 0.065** and report the conflict as a sensitivity, because adopting 0.36
+  changes no conclusion in any cell. It would stretch payback 35 to 80% and hit
+  the A4000 hardest. One sentence in methods covers it.
+- **The GPU model strings do not join.** `data/embodied/` uses hyphens
+  (`NVIDIA-GeForce-RTX-2080-Ti`), `runs.jsonl` records `gpu_model_observed` with
+  spaces. A join without normalisation drops rows silently rather than raising.
+  Whoever writes `carbon_model.py` hits this first.
+- **`embodied_carbon.py` does not meet Coding conventions.** CSVs go to the
+  current working directory rather than a module-level constant, no
+  `if __name__ == "__main__":`, not runnable as `python -m`. The numbers are
+  sound; the packaging needs a pass before Phase 8 imports from it.
+
+One thing to tell Veda: `EMBODIED.md` asks the team to confirm Gap 5, the
+GPU-against-node scope. **It was decided on 2026-08-23 and her recommendation
+matches it** (card-level as the figure, die-only as the floor, whole-node out of
+scope). See item 1 above. Nothing to redo.
+
+Also unpropagated: `docs/tasks/phase8-break-even-inputs.md` line 240 still
+carries the 50 to 400 kg placeholder in its inputs table.
+
+### 3. Phase 8: the carbon model (UNBLOCKED, and now the critical path)
 
 Owner doc: `docs/tasks/phase8-break-even-inputs.md`. **Read it before writing
 any code**; it walks the equation term by term and finds six gaps.
 
 Build `analysis/carbon_model.py` with `break_even_jobs`,
 `break_even_hours_per_year`, `payback_curve`.
+
+Both sides of the inequality now have numbers: operational energy from
+`data/processed/fleet_runs.jsonl`, embodied from
+`data/embodied/embodied_carbon_cardlevel.csv`. No cluster access needed.
+
+**A hand calculation is already in `CLAUDE.md` under Break-even model. Reproduce
+it before trusting the module.** It gives 118 to 3,273 continuous hours of
+1080 Ti work to repay a replacement card, depending on workload, embodied bound
+and grid preset, which is 5 to 136 days. If `carbon_model.py` disagrees with
+that, one of the two is wrong and it is worth finding out which before building
+anything on top.
+
+That magnitude reorders the remaining work. **Utilisation, not embodied carbon,
+is now the dominant unknown**, because a card busy 10% of the time repays ten
+times slower. Gap 6 below therefore matters more than its "probably unavailable"
+status suggests, and the parameterised curve is the deliverable rather than a
+fallback.
 
 Use this units line exactly. Dropping the conversion is wrong by 3.6 million
 while still looking plausible:
@@ -169,14 +248,20 @@ Status of the six gaps as of 2026-08-23:
 | 2. Boundary is the GPU board only | Open. A statement to make in methods, not work. Excludes host CPU, so it understates the slower card |
 | 3. PUE absent | Open. Probably a swept parameter: the fleet spans many institutions |
 | 4. Snapshot against integral | Open. Grid intensity declines, so later savings are worth less |
-| 5. GPU against whole node | **Closed 2026-08-23**: the GPU. See item 1 |
-| 6. Real NRP utilisation | Open. Probably unavailable at user-level access. If so, ship a parameterised curve and say the reader supplies utilisation |
+| 5. GPU against whole node | **Closed 2026-08-23**: the GPU. See item 1. Phase 7 sourced per-card figures on that basis |
+| 6. Real NRP utilisation | Open, and **now the dominant unknown**, since embodied carbon turned out small. Probably unavailable at user-level access. If so, ship a parameterised curve and say the reader supplies utilisation |
 
 ### 4. Phase 9: sensitivity
 
 Owner doc: `docs/phases.md` (weeks 7 to 8). Sweep embodied carbon across its
 plausible range and find where the break-even answer flips. Project grid
 intensity forward to see whether replacements that fail today pay off by 2030.
+
+**Phase 7's figures change what this phase is for.** The embodied band is small
+enough that payback lands in days-to-months of continuous work, so sweeping
+embodied carbon alone will probably not flip anything. The axes that can flip it
+are **utilisation** and **grid intensity**, so lead with those and report the
+embodied sweep as the robustness check it turned out to be.
 
 Add two axes the original plan did not anticipate, both from this project's own
 measurements: the **6.43% same-model variance bound**, and the **1080 Ti resnet
