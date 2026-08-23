@@ -39,6 +39,7 @@ import transformers
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from benchmarks._context import RunContext
+from benchmarks._result import PRECISION_NAMES, WorkloadResult, extra_fields
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,11 @@ DEFAULT_CACHE_DIR = "/models/hf"
 DEFAULT_MAX_NEW_TOKENS = 500
 DEFAULT_WARMUP_ITERS = 1
 
-PRECISIONS = ("fp32", "tf32", "fp16", "bf16")
+# The shared vocabulary, not a second copy of it. benchmarks/_result.py owns the
+# list because the record contract validates against it, and a mode this module
+# accepted but the schema rejected would fail at record construction rather than
+# at argument parsing.
+PRECISIONS = PRECISION_NAMES
 
 # Each precision fully determines both the dtype and the TF32 flags, so no
 # combination is ever left to a library default. tf32 is a separate mode rather
@@ -76,6 +81,12 @@ _PRECISION_SPEC = {
     "fp16": (torch.float16, False),
     "bf16": (torch.bfloat16, False),
 }
+
+if set(_PRECISION_SPEC) != set(PRECISIONS):
+    raise RuntimeError(
+        f"_PRECISION_SPEC {sorted(_PRECISION_SPEC)} has drifted from the shared "
+        f"vocabulary {sorted(PRECISIONS)}"
+    )
 
 # Hash encoding version. Bump if the byte encoding below ever changes, because
 # doing so silently invalidates comparison against previously recorded hashes.
@@ -146,7 +157,10 @@ def _set_precision(precision: str, device: str) -> dict:
         tf32_effective = False
 
     return {
-        "precision_mode": precision,
+        # "precision", not "precision_mode". The schema names this column
+        # `precision`, and emitting a second name for it left every llm row
+        # null in the required column while the value hid elsewhere.
+        "precision": precision,
         "resolved_dtype": str(dtype),
         "tf32_requested": tf32_requested,
         # Read back, never echoed from the request. On a 1080 Ti these are a
@@ -378,7 +392,7 @@ def run(
     cache_dir: str = DEFAULT_CACHE_DIR,
     deterministic: bool = False,
     ctx: RunContext | None = None,
-) -> dict:
+) -> WorkloadResult:
     """Runs the fixed-work GPT-2 token generation benchmark.
 
     Args:
@@ -399,10 +413,11 @@ def run(
         created for a standalone CLI run.
 
     Returns:
-      dict of runtime_seconds, work_hash, warmup_iters, plus the full metadata
-      record required by docs/tasks/phase3-llm-inference.md. The generated token
-      IDs are returned under "token_ids" for divergence diagnosis; callers writing
-      tabular output should split that into a sidecar rather than a CSV column.
+      A WorkloadResult. The required fields are enforced by its constructor; the
+      full metadata record required by docs/tasks/phase3-llm-inference.md rides
+      in `extra`. The generated token IDs are in extra under "token_ids" for
+      divergence diagnosis; callers writing tabular output should split that into
+      a sidecar rather than a CSV column.
     """
     if model_key not in MODELS:
         raise ValueError(f"model_key must be one of {sorted(MODELS)}, got {model_key!r}")
@@ -488,14 +503,13 @@ def run(
         f"|n{max_new_tokens}|p{prompt_hash[:12]}"
     )
 
-    record = {
-        # Shared runner contract
-        "runtime_seconds": runtime_seconds,
-        "work_hash": _work_hash(new_tokens),
+    # Everything the required set does not already own. precision and both TF32
+    # read-backs are lifted out of precision_record into the constructor, since
+    # extra may not shadow a required field. The old "benchmark" key is gone:
+    # it duplicated the runner's own column for the concept "workload" names.
+    extra = {
         "warmup_iters": warmup_iters,
         # Work definition
-        "benchmark": "llm_inference",
-        "config_id": config_id,
         "model_key": model_key,
         "model_id": model_id,
         "model_revision": revision,
@@ -525,8 +539,33 @@ def run(
         # decoding with identical prompts, so store one row unless they are not.
         "token_ids": rows[0] if all_rows_identical else rows,
     }
-    record.update(precision_record)
-    record.update(_observed_hardware(device))
+    extra.update(extra_fields(precision_record))
+    extra.update(_observed_hardware(device))
+
+    record = WorkloadResult(
+        workload="llm_inference",
+        config_id=config_id,
+        work_hash=_work_hash(new_tokens),
+        # Output kind, and the only one of the three workloads that earns it.
+        # The hash is over the generated token IDs, so two matching runs produced
+        # bit-identical output. matmul and resnet hash their inputs instead,
+        # because a float reduction is not bit-identical across architectures.
+        work_hash_kind="output",
+        work_hash_covers="generated token ids, so matching runs are bit-identical",
+        precision=precision_record["precision"],
+        allow_tf32_matmul=precision_record["allow_tf32_matmul"],
+        allow_tf32_cudnn=precision_record["allow_tf32_cudnn"],
+        # Interim value 1: this workload runs exactly one generate() per timed
+        # region, so there is no inner loop yet. Whether it adopts the
+        # repetition-inside-the-timed-region design from
+        # docs/tasks/phase3-workload-sizing.md is open for Veda and Aidan; see
+        # "LLM inner_iters" under Unclaimed side work in CLAUDE.md. Energy per
+        # unit of work is energy_j / inner_iters, so 1 is the honest value for a
+        # single decode and not a placeholder that scales anything wrongly.
+        inner_iters=1,
+        runtime_seconds=runtime_seconds,
+        extra=extra,
+    )
 
     if not all_rows_identical:
         logger.error(
@@ -592,7 +631,7 @@ if __name__ == "__main__":
         device=args.device,
         cache_dir=args.cache_dir,
         deterministic=args.deterministic,
-    )
+    ).to_row()
 
     if args.out:
         _write_output(result, args.out)
