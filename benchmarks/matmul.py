@@ -41,7 +41,15 @@ from benchmarks._result import WorkloadResult, extra_fields
 logger = logging.getLogger(__name__)
 
 DEFAULT_N = 8192
-DEFAULT_ITERS = 200
+# Sized by measurement 2026-08-23, raised from 200. The fastest card both
+# reachable and free is the RTX 3090 at 45.54 ms per iteration, so 2000 iters is
+# a 90 s region on it and roughly 232 s on a 1080 Ti. At 200 the 3090 finished in
+# about 9 s, well under the 30 s floor, so every run at the old default was
+# excluded. The target is 90 s rather than the floor itself so a card twice as
+# fast as the 3090 still clears it without a resize, and a resize changes
+# config_id and work_hash and invalidates every row already collected. See
+# Workload sizing in CLAUDE.md.
+DEFAULT_ITERS = 2000
 DEFAULT_WARMUP = 10
 
 # Fixed seed so the input matrices are identical on every card. The previous
