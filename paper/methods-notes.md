@@ -445,3 +445,44 @@ Consequence for the sweep: the cards that are reachable *and* free are the 1080
 Ti, 2080 Ti, 3090 and A4000. A GTX 1080 Ti (2017, Pascal) to RTX 3090 (2020,
 Ampere) replacement pair is measurable at n=5 today; anything involving the L4,
 L40S or 4090 is not.
+
+## The idle measurement's own scatter exceeds the difference between cards
+
+Found 2026-08-23 while building `analysis/carbon_model.py`, from
+`data/processed/energy_by_gpu.csv`. It bears on how far the idle result can be
+pushed in the paper.
+
+`idle_post_context_avg_w_mean` is recorded per pod, so each of the nine
+(card, workload) groups carries its own figure. Comparing them:
+
+| Card | matmul | resnet | llm | within-card spread |
+|---|---|---|---|---|
+| GTX 1080 Ti | 25.43 | 25.65 | 24.10 | 1.54 W |
+| RTX 2080 Ti | 19.83 | 20.93 | 33.40 | **13.57 W** |
+| RTX A4000 | 25.06 | 25.29 | 28.95 | 3.89 W |
+
+The spread of per-card means across the three cards is **1.71 W**. The largest
+spread *within* one physical card, across workloads, is **13.57 W**. The
+measurement's own scatter is therefore roughly **eight times** the quantity we
+would like to attribute to card identity.
+
+A card's idle draw does not depend on which workload it later ran, so
+`idle_post_context` is not holding some relevant state constant. The likeliest
+candidate is resident VRAM: the LLM pods leave gpt2-xl's 6.43 GB in the
+allocator when the window is sampled, and the two highest readings in the table
+are both `llm_inference`. That is a hypothesis from three cards, not a measured
+cause, and settling it would need an idle window sampled with the allocator
+deliberately emptied.
+
+**What this does and does not change.** It does not weaken the headline idle
+result, it strengthens it: replacement buys no measurable idle saving, and now
+there are two independent reasons rather than one. The between-card differences
+were already inside the 6.43% same-model variance bound, and they are also
+inside the within-card measurement scatter.
+
+What it does rule out is any *signed* claim about idle. `carbon_model.py` will
+report an idle contribution of up to 98 kg CO2e over six years for a given pair,
+with a sign that flips depending on which workload's idle figure is used. The
+model flags any differential below 13.57 W as noise for exactly this reason.
+Methods should state that the idle term is bounded and indistinguishable from
+zero, not that a particular card idles lower.

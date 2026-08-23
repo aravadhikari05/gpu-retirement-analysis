@@ -950,8 +950,33 @@ approx 0.390, ERCOT approx 0.400, PJM approx 0.550.
 
 ## Break-even model
 
-`analysis/summarize_runs.py` exists and prepares the input table.
-`analysis/carbon_model.py` does not exist yet.
+`analysis/summarize_runs.py` prepares the input table.
+**`analysis/carbon_model.py` exists as of 2026-08-23**, with
+`analysis/grid_intensity.py` beside it and `tests/test_carbon_model.py` covering
+both. It reads `data/processed/energy_by_gpu.csv` and re-derives nothing from
+`runs.jsonl`, since `analysis/fleet_subset.py` is the one definition of the
+analysable slice.
+
+Built before Phase 7 deliberately. Embodied carbon is an argument to the model,
+not a prerequisite for writing it, and Phase 9 has to sweep it regardless, so
+the model is parameterised over it either way. `EmbodiedEstimate` and
+`GridIntensity` carry a `sourced` flag, any False taints
+`BreakEven.provisional`, and the CLI refuses to print without
+`--allow-unsourced`. Every figure it produces today is arithmetic, not a result.
+
+Three measured findings are enforced in code rather than described in prose:
+a per-job energy difference inside the 6.43% same-model variance bound sets
+`interpretable=False`; every result carries the note that the integral
+understates the saving, so thresholds are pessimistic about replacement; and an
+idle differential below 13.57 W is reported as noise, per the scatter finding in
+`paper/methods-notes.md`.
+
+**A job is one `inner_iter`**, which is what `energy_j_per_inner_iter` holds.
+**Gap 4 is resolved in the signature**: `horizon_years=None` reproduces the
+original job-count inequality and drops the idle term, because idle is a rate
+and a job count has no time dimension. Including idle needs a horizon. That is
+the project premise failing to fit the original equation, not a code
+limitation.
 
 Core inequality as originally written:
 `embodied_new < (energy_per_job_old - energy_per_job_new) * expected_jobs * grid_intensity`.
