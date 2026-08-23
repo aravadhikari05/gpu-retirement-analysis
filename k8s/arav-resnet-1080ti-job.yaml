@@ -1,0 +1,85 @@
+# First GPU run of resnet_train through measurement/runner.py with power attached.
+# Owner: Arav. Rendered from k8s/benchmark-pod.yaml (Veda's template), with three
+# deliberate differences, all noted here so the template can absorb them later:
+#
+#   1. Image pinned by digest, not :latest. Container builds in CLAUDE.md says
+#      reference by digest; :latest moves on every main Dockerfile build. This
+#      digest is sha-023110f, the current main tip, which carries
+#      benchmarks/_context.py and the run(ctx=...) contract.
+#   2. /dev/shm emptyDir. resnet_train._make_loader uses num_workers=2 and the
+#      k8s default shm is 64 MB, which 224x224 batches through the worker queues
+#      exceed. Without this the worker is killed mid-run and the run is lost.
+#      num_workers is a module constant, so it cannot be worked around via --set.
+#   3. --repeats 1. resnet has never run on a GPU and NUM_BATCHES is a module
+#      constant, so there is no cheap smoke path. Read this row, then go to 5.
+#
+# 1080 Ti chosen deliberately: it is the card preflight verified on 2026-08-18,
+# so its NVML energy counter behaviour is known and any surprise here is resnet's.
+#
+# Delete when Complete. It holds a GPU.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: arav-resnet-1080ti
+  namespace: cmpm118
+  labels:
+    app: gpu-retirement
+    gpu-retirement/benchmark: resnet_train
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: gpu-retirement
+        gpu-retirement/benchmark: resnet_train
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: bench
+        image: ghcr.io/aravadhikari05/gpu-retirement-analysis@sha256:ec4194abca45b10e1a054b60b2abaecc96ab55216b12c8f5c35e1042d4f03f0d
+        args:
+        - "--benchmark"
+        - "resnet_train"
+        - "--repeats"
+        - "1"
+        - "--set"
+        - "precision=fp32"
+        - "--out-dir"
+        - "/results"
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        # runner.py records these from env and leaves them blank if unset, with
+        # no error, so they are set explicitly rather than left to the template.
+        - name: IMAGE_REF
+          value: "ghcr.io/aravadhikari05/gpu-retirement-analysis@sha256:ec4194abca45b10e1a054b60b2abaecc96ab55216b12c8f5c35e1042d4f03f0d"
+        - name: GIT_COMMIT
+          value: "023110f53c68705866b83501147ca1b65e4115c4"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: 16Gi
+            cpu: "8"
+          requests:
+            nvidia.com/gpu: 1
+            memory: 16Gi
+            cpu: "8"
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: results
+        persistentVolumeClaim:
+          claimName: matmul-results
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 2Gi
+      nodeSelector:
+        nvidia.com/gpu.product: NVIDIA-GeForce-GTX-1080-Ti

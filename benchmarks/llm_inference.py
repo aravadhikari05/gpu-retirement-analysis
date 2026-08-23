@@ -39,6 +39,7 @@ import transformers
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from benchmarks._context import RunContext
+from benchmarks._result import PRECISION_NAMES, WorkloadResult, extra_fields
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +62,42 @@ PROMPT = (
 )
 
 DEFAULT_CACHE_DIR = "/models/hf"
-DEFAULT_MAX_NEW_TOKENS = 500
+DEFAULT_MODEL_KEY = "gpt2-xl"
+# 960, not the 500 this file defaulted to until 2026-08-23. The 500 token gpt2
+# configuration came from a superseded spec draft and CLAUDE.md records it as
+# dead; the measured configuration is gpt2-xl at 960 new tokens. The old
+# defaults meant any run that forgot to override them silently measured the
+# abandoned configuration, and config_id faithfully recorded that it had.
+DEFAULT_MAX_NEW_TOKENS = 960
 DEFAULT_WARMUP_ITERS = 1
+# Generations per timed region. One generate() cannot clear the 30 second floor
+# on the fleet the sweep actually targets: gpt2-xl at 960 tokens took 34.40 s on
+# a GTX 1080 Ti and 15.45 s on an L40S, and the fastest card in the chosen fleet
+# is an RTX 3090, whose memory bandwidth is in L40S territory. Batch 1 decode is
+# bandwidth bound, so the 3090 lands near 15 s, which is half the floor. Neither
+# a longer generation nor a bigger model fixes it: n_positions is 1024 for both
+# gpt2 and gpt2-xl, and long greedy generations degenerate into a KV cache loop
+# (distinct_token_ratio 0.019 at 960 tokens). Repetition inside the timed region
+# is the only route to the floor, and it is what matmul and resnet already do.
+#
+# 8 is chosen against a measurement plus margin, NOT measured on a 3090. At an
+# estimated 15 s per generation it puts a 3090 near 120 s; the 3090 would have
+# to be four times faster than the measured L40S before the region fell under
+# 30 s. Overshooting is close to free, since CLAUDE.md withdrew the run length
+# ceiling and the runner flushes each repetition as it completes, while
+# undershooting costs a re-run and changes config_id. Do not retune this down
+# if a later 3090 run shows slack: the headroom is the insurance.
+#
+# What this measures is throughput inference, N independent decodes of one
+# prompt, not single request latency. The paper has to name which question it
+# answers.
+DEFAULT_INNER_ITERS = 8
 
-PRECISIONS = ("fp32", "tf32", "fp16", "bf16")
+# The shared vocabulary, not a second copy of it. benchmarks/_result.py owns the
+# list because the record contract validates against it, and a mode this module
+# accepted but the schema rejected would fail at record construction rather than
+# at argument parsing.
+PRECISIONS = PRECISION_NAMES
 
 # Each precision fully determines both the dtype and the TF32 flags, so no
 # combination is ever left to a library default. tf32 is a separate mode rather
@@ -76,6 +109,12 @@ _PRECISION_SPEC = {
     "fp16": (torch.float16, False),
     "bf16": (torch.bfloat16, False),
 }
+
+if set(_PRECISION_SPEC) != set(PRECISIONS):
+    raise RuntimeError(
+        f"_PRECISION_SPEC {sorted(_PRECISION_SPEC)} has drifted from the shared "
+        f"vocabulary {sorted(PRECISIONS)}"
+    )
 
 # Hash encoding version. Bump if the byte encoding below ever changes, because
 # doing so silently invalidates comparison against previously recorded hashes.
@@ -146,7 +185,10 @@ def _set_precision(precision: str, device: str) -> dict:
         tf32_effective = False
 
     return {
-        "precision_mode": precision,
+        # "precision", not "precision_mode". The schema names this column
+        # `precision`, and emitting a second name for it left every llm row
+        # null in the required column while the value hid elsewhere.
+        "precision": precision,
         "resolved_dtype": str(dtype),
         "tf32_requested": tf32_requested,
         # Read back, never echoed from the request. On a 1080 Ti these are a
@@ -369,16 +411,17 @@ def _sync(device: str) -> None:
 
 
 def run(
-    model_key: str = "gpt2",
+    model_key: str = DEFAULT_MODEL_KEY,
     batch_size: int = 1,
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
+    inner_iters: int = DEFAULT_INNER_ITERS,
     precision: str = "fp32",
     warmup_iters: int = DEFAULT_WARMUP_ITERS,
     device: str = "cuda:0",
     cache_dir: str = DEFAULT_CACHE_DIR,
     deterministic: bool = False,
     ctx: RunContext | None = None,
-) -> dict:
+) -> WorkloadResult:
     """Runs the fixed-work GPT-2 token generation benchmark.
 
     Args:
@@ -386,6 +429,10 @@ def run(
       batch_size: Number of identical prompt rows generated in parallel.
       max_new_tokens: Tokens to generate per row. min_new_tokens is pinned to the
         same value so EOS cannot stop one card early.
+      inner_iters: Identical generate() calls inside the timed region. Exists to
+        clear the 30 second power sampling floor on fast cards, since one decode
+        cannot. Energy per decode is energy_j / inner_iters. Part of config_id:
+        runs with different values did different work and are not poolable.
       precision: One of PRECISIONS. Determines dtype and both TF32 flags.
       warmup_iters: Full identical generate() calls run and discarded before timing.
       device: Torch device string. "cpu" is supported for smoke testing.
@@ -394,15 +441,16 @@ def run(
         algorithms change kernel selection and therefore energy, which is the
         quantity the surrounding measurement exists to capture.
       ctx: Timed-region context supplied by measurement/runner.py, which scopes
-        power measurement to the timed generate() and excludes the model load
-        (roughly 60 s from cephfs on gpt2-xl) and warmup. A monitor-less one is
-        created for a standalone CLI run.
+        power measurement to the timed generate() calls and excludes the model
+        load (roughly 60 s from cephfs on gpt2-xl) and warmup. A monitor-less one
+        is created for a standalone CLI run.
 
     Returns:
-      dict of runtime_seconds, work_hash, warmup_iters, plus the full metadata
-      record required by docs/tasks/phase3-llm-inference.md. The generated token
-      IDs are returned under "token_ids" for divergence diagnosis; callers writing
-      tabular output should split that into a sidecar rather than a CSV column.
+      A WorkloadResult. The required fields are enforced by its constructor; the
+      full metadata record required by docs/tasks/phase3-llm-inference.md rides
+      in `extra`. The generated token IDs are in extra under "token_ids" for
+      divergence diagnosis; callers writing tabular output should split that into
+      a sidecar rather than a CSV column.
     """
     if model_key not in MODELS:
         raise ValueError(f"model_key must be one of {sorted(MODELS)}, got {model_key!r}")
@@ -410,6 +458,8 @@ def run(
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
     if max_new_tokens < 1:
         raise ValueError(f"max_new_tokens must be >= 1, got {max_new_tokens}")
+    if inner_iters < 1:
+        raise ValueError(f"inner_iters must be >= 1, got {inner_iters}")
     if warmup_iters < 0:
         raise ValueError(f"warmup_iters must be >= 0, got {warmup_iters}")
 
@@ -444,6 +494,12 @@ def run(
     # different kernels than the long-sequence decode path and would not reach
     # thermal or clock steady state, which matters because energy is the
     # dependent variable downstream.
+    #
+    # Warmup is NOT scaled by inner_iters. One full generation already primes
+    # the decode path and the clocks, and matmul and resnet warm up with a small
+    # fraction of their loop (10 of 2000, 5 of 1000) rather than a matching one.
+    # Whether that is enough on a cold card is the warmup-length axis that
+    # docs/tasks/phase3-workload-sizing.md says to measure rather than assume.
     with torch.inference_mode():
         for i in range(warmup_iters):
             logger.info("Warmup iteration %d of %d (not counted)", i + 1, warmup_iters)
@@ -451,18 +507,27 @@ def run(
         _sync(device)
 
         logger.info(
-            "Timed region: %s, batch %d, %d new tokens, precision %s",
+            "Timed region: %s, batch %d, %d new tokens, %d iterations, precision %s",
             model_id,
             batch_size,
             max_new_tokens,
+            inner_iters,
             precision,
         )
         # ctx.timed_region syncs at both boundaries and marks them on the power
-        # monitor, so energy covers exactly this generate() and excludes the
-        # model load and warmup above.
+        # monitor, so energy covers exactly these generate() calls and excludes
+        # the model load and warmup above. Energy per unit of work is
+        # energy_j / inner_iters.
+        #
+        # Outputs are collected rather than overwritten so that every iteration
+        # can be checked for equality AFTER the region closes. Comparing inside
+        # would force a device sync and a host copy per iteration and would time
+        # that work as if it were inference. The tensors stay on the device and
+        # cost 960 int64 per iteration, which is nothing.
         with ctx.timed_region(device):
-            outputs = model.generate(**generate_kwargs)
+            per_iteration = [model.generate(**generate_kwargs) for _ in range(inner_iters)]
         runtime_seconds = ctx.region_runtime_s
+        outputs = per_iteration[-1]
 
     new_tokens = outputs[:, prompt_len:].to("cpu").to(torch.int64).contiguous()
     if int(new_tokens.shape[1]) != max_new_tokens:
@@ -470,6 +535,15 @@ def run(
             f"expected {max_new_tokens} new tokens, got {int(new_tokens.shape[1])}. "
             "The run is not comparable and must not be recorded as valid."
         )
+
+    # Greedy decoding is an argmax over a fixed prompt, so every iteration must
+    # produce the same tokens. If they diverge, something is nondeterministic
+    # and the run is not fixed work. Checked, recorded, and never assumed.
+    first_iteration = per_iteration[0][:, prompt_len:].to("cpu").to(torch.int64)
+    iterations_identical = all(
+        torch.equal(out[:, prompt_len:].to("cpu").to(torch.int64), first_iteration)
+        for out in per_iteration
+    )
 
     rows = new_tokens.tolist()
     all_rows_identical = all(row == rows[0] for row in rows)
@@ -483,19 +557,22 @@ def run(
     longest_repeat = _longest_repeated_ngram(rows[0])
 
     prompt_hash = hashlib.sha256(PROMPT.encode("utf-8")).hexdigest()
+    # inner_iters is part of the configuration, not a runtime detail: a 1
+    # iteration run and an 8 iteration run did different amounts of work and
+    # must never be pooled. Adding it changes config_id for every future llm
+    # run, which is intended and is why it is done before the sweep.
     config_id = (
         f"{model_key}|{revision[:12]}|{precision}|b{batch_size}"
-        f"|n{max_new_tokens}|p{prompt_hash[:12]}"
+        f"|n{max_new_tokens}|i{inner_iters}|p{prompt_hash[:12]}"
     )
 
-    record = {
-        # Shared runner contract
-        "runtime_seconds": runtime_seconds,
-        "work_hash": _work_hash(new_tokens),
+    # Everything the required set does not already own. precision and both TF32
+    # read-backs are lifted out of precision_record into the constructor, since
+    # extra may not shadow a required field. The old "benchmark" key is gone:
+    # it duplicated the runner's own column for the concept "workload" names.
+    extra = {
         "warmup_iters": warmup_iters,
         # Work definition
-        "benchmark": "llm_inference",
-        "config_id": config_id,
         "model_key": model_key,
         "model_id": model_id,
         "model_revision": revision,
@@ -504,7 +581,9 @@ def run(
         "batch_size": batch_size,
         "min_new_tokens": max_new_tokens,
         "max_new_tokens": max_new_tokens,
-        "tokens_generated_total": batch_size * max_new_tokens,
+        "tokens_generated_total": batch_size * max_new_tokens * inner_iters,
+        "tokens_generated_per_iteration": batch_size * max_new_tokens,
+        "iterations_identical": iterations_identical,
         "use_cache": True,
         "do_sample": False,
         "num_beams": 1,
@@ -525,8 +604,36 @@ def run(
         # decoding with identical prompts, so store one row unless they are not.
         "token_ids": rows[0] if all_rows_identical else rows,
     }
-    record.update(precision_record)
-    record.update(_observed_hardware(device))
+    extra.update(extra_fields(precision_record))
+    extra.update(_observed_hardware(device))
+
+    record = WorkloadResult(
+        workload="llm_inference",
+        config_id=config_id,
+        work_hash=_work_hash(new_tokens),
+        # Output kind, and the only one of the three workloads that earns it.
+        # The hash is over the generated token IDs, so two matching runs produced
+        # bit-identical output. matmul and resnet hash their inputs instead,
+        # because a float reduction is not bit-identical across architectures.
+        work_hash_kind="output",
+        work_hash_covers="generated token ids, so matching runs are bit-identical",
+        precision=precision_record["precision"],
+        allow_tf32_matmul=precision_record["allow_tf32_matmul"],
+        allow_tf32_cudnn=precision_record["allow_tf32_cudnn"],
+        # Real now, not the interim 1. The timed region runs inner_iters
+        # generate() calls, so energy_j / inner_iters is energy per decode. See
+        # DEFAULT_INNER_ITERS for why 8 and why it should not be retuned down.
+        inner_iters=inner_iters,
+        runtime_seconds=runtime_seconds,
+        extra=extra,
+    )
+
+    if not iterations_identical:
+        logger.error(
+            "Iterations within the timed region produced different tokens under "
+            "greedy decoding. The run is not fixed work and must not be treated "
+            "as valid."
+        )
 
     if not all_rows_identical:
         logger.error(
@@ -568,10 +675,13 @@ def _write_output(record: dict, out_path: str) -> None:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description="GPT-2 token generation benchmark")
-    parser.add_argument("--model", dest="model_key", default="gpt2", choices=sorted(MODELS))
+    parser.add_argument(
+        "--model", dest="model_key", default=DEFAULT_MODEL_KEY, choices=sorted(MODELS)
+    )
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--max-new-tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS)
     parser.add_argument("--precision", default="fp32", choices=list(PRECISIONS))
+    parser.add_argument("--inner-iters", type=int, default=DEFAULT_INNER_ITERS)
     parser.add_argument("--warmup-iters", type=int, default=DEFAULT_WARMUP_ITERS)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--cache-dir", default=DEFAULT_CACHE_DIR)
@@ -587,12 +697,13 @@ if __name__ == "__main__":
         model_key=args.model_key,
         batch_size=args.batch_size,
         max_new_tokens=args.max_new_tokens,
+        inner_iters=args.inner_iters,
         precision=args.precision,
         warmup_iters=args.warmup_iters,
         device=args.device,
         cache_dir=args.cache_dir,
         deterministic=args.deterministic,
-    )
+    ).to_row()
 
     if args.out:
         _write_output(result, args.out)

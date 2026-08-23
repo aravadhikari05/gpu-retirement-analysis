@@ -1,0 +1,54 @@
+# Pre-stages CIFAR-10 onto the results PVC so no measured run downloads it.
+# Owner: Arav. CPU only, no GPU requested: this must never occupy a card.
+#
+# benchmarks/resnet_train.py calls CIFAR10(..., download=True) into
+# /results/data/cifar10 during setup. That sits outside the timed region, so it
+# cannot corrupt energy, but correctness requirement 4 in CLAUDE.md asks for
+# inputs pre-staged with no network access during measurement. This job makes
+# the measured pod's download a cache hit.
+#
+# Run once. Delete when Complete. The data persists on the PVC.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: arav-cifar-prep
+  namespace: cmpm118
+  labels:
+    app: gpu-retirement
+    gpu-retirement/role: data-prep
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: gpu-retirement
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: prep
+        image: ghcr.io/aravadhikari05/gpu-retirement-analysis@sha256:ec4194abca45b10e1a054b60b2abaecc96ab55216b12c8f5c35e1042d4f03f0d
+        # The image ENTRYPOINT is measurement.runner, so it is overridden here.
+        command: ["python3", "-c"]
+        args:
+        - |
+          import torchvision
+          d = torchvision.datasets.CIFAR10(
+              root="/results/data/cifar10", train=True, download=True
+          )
+          print("cifar10 train rows:", len(d))
+          # resnet_train._plan_indices assumes 50000. Fail here, not on a GPU.
+          assert len(d) == 50000, f"expected 50000 rows, got {len(d)}"
+        resources:
+          limits:
+            memory: 4Gi
+            cpu: "2"
+          requests:
+            memory: 4Gi
+            cpu: "2"
+        volumeMounts:
+        - name: results
+          mountPath: /results
+      volumes:
+      - name: results
+        persistentVolumeClaim:
+          claimName: matmul-results

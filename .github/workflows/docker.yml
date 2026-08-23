@@ -2,7 +2,11 @@ name: Build and Push Container
 
 on:
   push:
-    branches: [main]
+    # schema-idle-sizing is listed so the enforced WorkloadResult, the idle
+    # power path and the new sizing defaults can be smoke tested on a GPU
+    # before they merge. None of that code has ever executed. Remove the
+    # branch once it lands.
+    branches: [main, schema-idle-sizing]
     paths:
       - "Dockerfile"
       - "benchmarks/**"
@@ -31,6 +35,12 @@ jobs:
         with:
           context: .
           push: true
+          # :latest ONLY from the default branch. k8s/interactive.yaml and
+          # k8s/sample_job.yaml pull :latest, so a feature branch build moving
+          # it would change the image everyone else runs, underneath them.
+          # CLAUDE.md asserted that could not happen. That was true of the
+          # GitLab CI, not of this workflow, which tagged :latest
+          # unconditionally and was safe only because it never ran off main.
           tags: |
-            ghcr.io/aravadhikari05/gpu-retirement-analysis:latest
             ghcr.io/aravadhikari05/gpu-retirement-analysis:sha-${{ github.sha }}
+            ${{ github.ref == 'refs/heads/main' && 'ghcr.io/aravadhikari05/gpu-retirement-analysis:latest' || '' }}
