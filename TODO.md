@@ -72,6 +72,44 @@ backwards from them, which is a modelling assumption with its own error bars.
 This decision determines **which numbers Phase 7 goes and sources**, so making
 it afterwards means sourcing twice. It needs a person, not a computation.
 
+**Recommendation: the GPU, not the node. Not yet confirmed by anyone, so treat
+this as a proposal to accept or reject, not a settled decision.**
+
+Three reasons, all grounded in what the project actually measured:
+
+1. **It matches the operational scope.** `pynvml` reports the GPU board and
+   nothing else, which is Gap 2 of the same document. Putting a whole-system
+   embodied figure on one side of the inequality and board-only operational
+   energy on the other compares two different scopes and quietly favours the
+   answer with the larger embodied term.
+2. **It matches the hardware.** The fleet is consumer and workstation cards,
+   1080 Ti, 2080 Ti and A4000. These are cards that genuinely get swapped inside
+   an existing chassis, which is the realistic move for an academic cluster
+   running donated hardware.
+3. **It matches the question.** "Is this old card worth replacing" rather than
+   "is this old server worth replacing."
+
+What accepting it costs, and what therefore has to be stated in methods:
+
+- Vendor PCF reports are whole-system, so a GPU-only figure is worked backwards
+  from them. That subtraction is a modelling assumption with its own error bars,
+  stacked on the report's. The ACT model builds up from die size instead and is
+  naturally GPU-shaped, so prefer it where the die-level inputs exist and use
+  PCF reports as a cross-check rather than the primary source.
+- Host energy is excluded on the operational side, which understates the slower
+  card. Known direction, so state it.
+
+**This interacts with the framing conversation with Prof. Jullig below.** If the
+answer there is that NRP retires whole nodes rather than swapping cards, this
+recommendation flips and Phase 7 sources whole-system figures instead. Take both
+questions to that conversation at once rather than deciding this one alone.
+
+Two related boundaries in the same Gap, which need stating rather than solving:
+a card retired here may be redeployed elsewhere rather than scrapped, in which
+case its remaining operational carbon moves rather than disappears; and
+end-of-life and disposal carbon is absent from the model entirely, though it is
+usually small next to manufacturing.
+
 ### 2. Phase 7: embodied carbon (blocks items 3 and 4)
 
 Owner doc: `docs/phases.md` (weeks 5 to 6). Placeholder figures and the sources
