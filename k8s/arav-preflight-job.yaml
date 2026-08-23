@@ -1,15 +1,21 @@
 # Per-GPU preflight check. Run once per GPU model before trusting its data.
 #
-# Render with envsubst, requires: IMAGE, GPU_SLUG, GPU_PRODUCT
+# Render with envsubst, requires: IMAGE, GPU_SLUG, GPU_PRODUCT, POWER_SECONDS
 #
 # Answers on real hardware what CLAUDE.md currently records as unverified:
 # whether this torch build carries the card's sm_XX, whether NVML resolves the
 # energy counter, and at what granularity the card reports wattage.
 #
-# preflight.py is supplied by a ConfigMap rather than baked into the image,
-# because it was written after the image that is being tested was built.
-# Mounting it avoids a second 20-plus minute build cycle to test the first one.
-# Once it is committed and built in, drop the volume and the ConfigMap.
+# The ConfigMap that used to supply preflight.py is gone, as that comment said
+# to do once the file was committed and built in. It is in the image now:
+# Dockerfile line 29 copies measurement/ wholesale, and the digest below is
+# built from a commit that contains preflight.py. Output goes to stdout as a
+# PREFLIGHT_JSON line, so no PVC is needed; capture it from the pod log.
+#
+# POWER_SECONDS: use 60, not the 20 this file first used. The 30 s floor exists
+# because a short sampling window makes the integral untrustworthy, and the
+# counter-against-integral comparison is one of the things preflight reports.
+# Comparing them over a 20 s window measures the floor, not the card.
 #
 # Conventions copied from k8s/aidan-llm-smoke-job.yaml, which worked:
 #   backoffLimit 0        a retry could land on a different card
@@ -53,7 +59,7 @@ spec:
         - python3
         - -m
         - measurement.preflight
-        - --power-seconds=20
+        - --power-seconds=${POWER_SECONDS}
         env:
         # Downward API rather than the census. CLAUDE.md requires the node be
         # observed at runtime, and kubectl get node <name> is Forbidden for us.
@@ -76,13 +82,3 @@ spec:
             cpu: "2"
             memory: 8Gi
             ephemeral-storage: 16Gi
-        volumeMounts:
-        # subPath overlays the single file into the package directory that
-        # already exists in the image, leaving the rest of measurement/ intact.
-        - name: preflight-src
-          mountPath: /app/measurement/preflight.py
-          subPath: preflight.py
-      volumes:
-      - name: preflight-src
-        configMap:
-          name: arav-preflight-src
