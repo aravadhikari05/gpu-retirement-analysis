@@ -1,8 +1,8 @@
 """Orchestrator: runs a benchmark with power monitoring and owns all writes.
 
-This is the container entrypoint. Benchmarks return a dict and touch no files;
-this module wraps the timed region with measurement/power_monitor.py and writes
-the results.
+This is the container entrypoint. Benchmarks return a benchmarks._result
+WorkloadResult and touch no files; this module wraps the timed region with
+measurement/power_monitor.py, flattens the result with .to_row() and writes it.
 
 Output layout under --out-dir:
 
@@ -46,6 +46,8 @@ import logging
 import os
 import subprocess
 import time
+
+from benchmarks._result import WorkloadResult
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +198,17 @@ def run_once(
     failure = None
     record = {}
     try:
-        record = module.run(ctx=ctx, **kwargs)
+        result = module.run(ctx=ctx, **kwargs)
+        if not isinstance(result, WorkloadResult):
+            # An authoring error, not a run failure, but treated as one so the
+            # power trace and a row with a reason still reach the PVC before the
+            # pod exits non-zero. The contract exists precisely so a payload
+            # missing a required field cannot reach analysis as a silent null.
+            raise TypeError(
+                f"{benchmark}.run() returned {type(result).__name__}, expected a "
+                "benchmarks._result.WorkloadResult"
+            )
+        record = result.to_row()
     except Exception as exc:
         # Kept with an explicit exclusion reason rather than vanishing, per the
         # repo convention. The row is written below and then the exception is
@@ -231,6 +243,10 @@ def run_once(
         "work_hash": record.get("work_hash", ""),
         "exclusion_reason": "",
         **power_fields,
+        # runtime_seconds is dropped rather than carried twice: the column is
+        # named runtime_s in every row already written and in
+        # analysis/summarize_runs.py, and two names for one number is the drift
+        # WorkloadResult exists to stop.
         **{k: v for k, v in record.items() if k not in ("runtime_seconds",)},
         **hardware,
     }

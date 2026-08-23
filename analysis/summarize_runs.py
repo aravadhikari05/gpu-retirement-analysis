@@ -36,6 +36,7 @@ FLAT_FIELDS = [
     "run_utc",
     "run_id",
     "benchmark",
+    "workload",
     "config_id",
     "repeat_index",
     "inner_iters",
@@ -50,6 +51,13 @@ FLAT_FIELDS = [
     "power_duration_s",
     "below_30s_floor",
     "work_hash",
+    # What the hash covers. "output" means the run was bit-identical, "config"
+    # means only that the same work was requested. Without it a reader takes the
+    # LLM's guarantee to be true of matmul and resnet as well.
+    "work_hash_kind",
+    # Region energy and whole-run energy are different quantities and must never
+    # be averaged together.
+    "power_window",
     "gpu_model_observed",
     "gpu_uuid",
     "node_name",
@@ -154,6 +162,7 @@ def aggregate(runs: list[dict]) -> list[dict]:
             ),
             "work_hash": members[0].get("work_hash", ""),
             "precision": members[0].get("precision", ""),
+            "work_hash_kind": members[0].get("work_hash_kind", ""),
             "inner_iters": sorted(inner)[0] if len(inner) == 1 else "MIXED",
             "energy_j_mean": statistics.fmean(energies) if energies else "",
             "energy_j_stdev": statistics.stdev(energies) if len(energies) > 1 else "",
@@ -186,6 +195,7 @@ def write_aggregate(rows: list[dict], path: str) -> None:
         "energy_j_mean",
         "energy_j_stdev",
         "energy_j_per_inner_iter",
+        "work_hash_kind",
         "runtime_s_mean",
         "runtime_s_stdev",
         "work_hash",
