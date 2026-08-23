@@ -10,6 +10,12 @@ what another document already owns.
 
 - `README.md` is the authoritative project structure and flow. Do not copy the
   tree into this file or into task docs; one copy, three pointers.
+- `TODO.md` is the authoritative **pickup list**: what to do next, in order,
+  with what blocks what. Written for someone with none of this conversation.
+  The to-do list further down this file is the **historical record** of how
+  items were closed and why; it is not where you look for the next task.
+  When something is finished, close it here with its evidence and remove it
+  from `TODO.md`.
 - `docs/phases.md` is the authoritative phase numbering, 1 through 10.
 - `docs/tasks/*.md` own per-workload specs and per-phase scoping.
   `phase3-workload-sizing.md` owns sweep sizing;
