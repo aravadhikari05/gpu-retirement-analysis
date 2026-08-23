@@ -199,6 +199,12 @@ and the k8s default shm of 64 MB is too small for 224x224 batches.
 
 A job can exit zero and still write a useless row. Check the rows.
 
+**Gates are evaluated per workload, not for the stage as a whole.** matmul and
+resnet share a job and stand or fall together, since a failure in one is
+evidence about shared machinery (the record contract, the idle path, the
+runner). The LLM is judged on its own: see "The LLM is quarantined, not
+blocking" below.
+
 | Check | Required |
 |---|---|
 | `power_window` | `region` on every row |
@@ -258,11 +264,38 @@ failed with the actual output, never a paraphrase.
 
 ### Policy by stage
 
-- **Stage 1 fails a gate: stop.** Do not start Stage 2. No retry: at 2am a
-  transient failure and a real one look identical, and guessing wrong produces a
-  3.3 GPU-hour dataset built on broken code.
-- **Stage 1 LLM fails but matmul and resnet pass:** run Stage 2 job A on all
-  three cards; hold every job B. This is precisely why the legs are split.
+- **Stage 1 fails a gate on matmul or resnet: stop.** Do not start Stage 2. No
+  retry: at 2am a transient failure and a real one look identical, and guessing
+  wrong produces a 3.3 GPU-hour dataset built on broken code. Those two
+  workloads exercise the record contract, the idle path and the runner, so a
+  failure there is evidence about machinery all three workloads share.
+
+### The LLM is quarantined, not blocking
+
+**If the LLM fails Stage 1 in any way, and matmul and resnet pass, carry the
+full plan through for those two anyway.** This is the case the split exists for,
+and it is the expected failure, since the LLM is the only leg needing the model
+PVC, 16 Gi of host RAM, and a brand new 8 iteration loop.
+
+Concretely, on LLM-only failure:
+
+- Run **Stage 2 job A on all three cards**, 5 repetitions of matmul and resnet
+  each. Do not reduce the card list, the repetition count, or the scope.
+- Hold every job B. Do not retry the LLM overnight, and do not attempt to repair
+  it if the cause is a traceback out of `benchmarks/llm_inference.py`: that is
+  code under test and section 6's boundary applies.
+- Do the **entire** morning-after procedure in section 8 for the matmul and
+  resnet rows: pull them, verify checksums, re-run the gate table, compare the
+  counter against the integral per card, check `gpu_uuid`, clean the namespace.
+  A two-workload dataset is a real result, not a consolation prize.
+- Report the LLM failure with its actual output, and say plainly which of the
+  four unverified changes it does and does not clear. An LLM failure still
+  leaves the enforced `WorkloadResult`, both idle windows and the matmul and
+  resnet sizing defaults verified, because those ran.
+
+The reverse does not hold. If matmul or resnet fails, the LLM does not proceed
+on its own, because their failure implicates shared machinery the LLM also
+depends on.
 - **A Stage 2 job fails mid-run:** let the others continue. Partial results
   survive because each repetition is flushed as it completes, and a failed
   repetition is written with an `exclusion_reason` rather than lost.
@@ -279,6 +312,10 @@ six may be launched together.
 |---|---|---|
 | A | matmul 5 reps, then resnet 5 reps | about 40 min |
 | B | llm 5 reps | about 26 min |
+
+If the LLM was quarantined at Stage 1, job B does not exist and Stage 2 is job A
+on all three cards. That is a complete run of this plan, not a partial one, and
+it costs about 2 GPU-hours rather than 3.3.
 
 Cards: **GTX 1080 Ti, RTX 2080 Ti, RTX A4000.** No 3090, by decision. All three
 have been preflighted, which is the first time the sweep fleet has been fully
