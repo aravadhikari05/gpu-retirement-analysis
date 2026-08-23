@@ -475,8 +475,13 @@ The 90 s target rather than 45 s leaves headroom for a card twice the 3090, so a
 later 4090 or L40S measurement does not force a resize; resizing changes
 `config_id` and `work_hash` and invalidates every row already collected. At
 about 1000 batches resnet stays inside CIFAR-10, whose 50,000 rows cap the
-design at 1,557 measured batches. Neither constant is implemented yet: matmul's
-is a `--set`, resnet's is a module constant and therefore a code change.
+design at 1,557 measured batches. **Both are implemented as of 2026-08-23.**
+matmul's `DEFAULT_ITERS` is now 2000 rather than 200, so a forgotten `--set` no
+longer produces a sub-floor run, and resnet's batch count moved from a module
+constant to a `run()` kwarg (`num_batches`, with `warmup_batches` alongside),
+which is also what makes the warmup-length axis below possible without another
+code change. `_plan_indices` raises before the CIFAR-10 loader is built and the
+error names the 1,557 ceiling.
 
 Run duration decisions:
 
@@ -503,7 +508,8 @@ Run duration decisions:
 ## Output contract
 
 Settled 2026-08-18. `measurement/runner.py` owns all result writes. Benchmarks
-return a dict and touch no files.
+return a `benchmarks._result.WorkloadResult` and touch no files; the runner
+flattens it with `.to_row()`.
 
 **Raw JSONL, derived CSV.** `runner.py` appends one JSON line per repetition to
 `runs.jsonl`; `analysis/summarize_runs.py` derives
@@ -545,6 +551,10 @@ column, and you stop when you cannot invent a new one.
 | Report n=5 for a model measured on one card | `gpu_uuid` |
 | Compare runs built from different images | `image_ref`, `git_commit` |
 | Average region energy against whole-run energy | `power_window` |
+| Read the LLM's bit-identical guarantee onto matmul and resnet | `work_hash_kind` |
+| Count only working energy for a card that is idle most of the time | `idle_pre_context_avg_w`, `idle_post_context_avg_w` |
+| Read a co-tenant's job on a shared node as the card's idle draw | `idle_*_peak_w`, `idle_*_min_w` |
+| Trust an idle figure from a window below the floor | `idle_*_duration_s`, `idle_*_n_samples` |
 
 `gpu_uuid` earns its place from evidence: the two L4 runs on 2026-08-11 both
 used `GPU-e82f7d3b`, and the 1080 Ti runs used two different physical cards.
@@ -563,7 +573,9 @@ card is not read as fleet variation.
 Still open for Veda and Aidan: whether `llm_inference.py` should adopt
 `inner_iters` when the repetition-inside-the-timed-region change from
 `docs/tasks/phase3-workload-sizing.md` is implemented. It currently runs one
-`generate()` per timed region, so it reports no `inner_iters` at all.
+`generate()` per timed region, and as of 2026-08-23 reports `inner_iters=1`,
+which is the honest value for a single decode rather than a placeholder. The
+enforcement below is what made the choice explicit instead of a missing column.
 
 ### The record schema is convention, not enforcement, and it drifted
 
@@ -597,8 +609,10 @@ in "How the column set was chosen" above: write the Phase 8 aggregation first,
 then for each wrong answer it could still produce, add exactly the one field that
 forbids it, and stop when you cannot invent a new wrong answer.
 
-**Decided 2026-08-18, not yet built:** replace the convention with an enforced
-`WorkloadResult`. Required fields become constructor arguments, so a benchmark
+**Decided 2026-08-18, built 2026-08-23** in `benchmarks/_result.py`, adopted by
+all three workloads and consumed by `runner.py`. What follows is the design as
+decided; the paragraph after it records what building it actually settled.
+Replace the convention with an enforced `WorkloadResult`. Required fields become constructor arguments, so a benchmark
 physically cannot return a record missing one; the error moves from a runtime
 null to an authoring-time construction error. Workload-specific fields go in an
 `extra` dict, and the runner reads `.to_row()`. The required set, derived by the
@@ -612,6 +626,75 @@ This forces one open decision loud rather than silent: llm emits no `inner_iters
 today, since it runs one `generate()` per timed region, so enforcement fails
 until it is set. The interim value is 1; the real fix is the
 repetition-in-the-timed-region change tracked under Unclaimed side work.
+
+**What building it settled, 2026-08-23.** All three drifts are closed. llm now
+emits `precision` rather than `precision_mode`, `workload` rather than reusing
+the runner's `benchmark` key, and a `work_hash_kind` of `output` with the prose
+`work_hash_covers` it previously lacked; matmul and resnet emit `config`. The
+runner treats a benchmark that returns anything other than a `WorkloadResult` as
+a recorded failure, so the power trace and a row with an exclusion reason still
+reach the PVC before the pod exits non-zero.
+
+Three things the decision did not say, resolved while implementing:
+
+- **`extra` may not shadow a required field**, and every workload has a
+  precision or provenance dict that overlaps the required set.
+  `benchmarks._result.extra_fields()` filters against `REQUIRED_FIELDS`, so
+  promoting a field into the required set later does not have to be undone by
+  hand at three call sites.
+- **`runtime_seconds` is not written to the row.** The column is `runtime_s`,
+  which is what every row already recorded and `summarize_runs.py` use. The
+  runner drops the constructor's name rather than carrying both, since two names
+  for one number is the drift being removed.
+- **`work_hash_kind` and `power_window` were missing from the derived CSV.**
+  Both were named in the table above and neither was in
+  `summarize_runs.FLAT_FIELDS`, so the distinction existed in the JSONL and
+  vanished in the table analysis actually reads. Added, along with `workload`.
+
+`benchmarks/_result.py` deliberately imports no torch, so the contract is
+testable in a plain interpreter off the GPU image. `tests/test_workload_result.py`
+and `tests/test_idle_power.py` run under `python -m unittest discover -s tests`.
+
+### Idle power is recorded per pod, in two windows
+
+Decided and implemented 2026-08-23, closing Gap 1 of
+`docs/tasks/phase8-break-even-inputs.md`, which owns the reasoning at length.
+`measure_idle()` in `measurement/runner.py` reuses `PowerMonitor` rather than
+sampling separately, and its output is stamped onto every row the pod writes.
+
+Two windows, because idle before and after CUDA context creation are different
+quantities and the paper has to name which it reports. `idle_pre_context` is the
+card's floor with no context in the process; `idle_post_context` has a live
+primary context and allocator but no model and no kernel, which is the NRP case
+the project premise is about, a pod holding a GPU it is not using. Neither
+includes the benchmark's model load, so neither covers resident weights. That is
+a scope boundary to state, not an oversight.
+
+**Once per pod, before the first repetition, cold.** Per repetition would
+multiply the cost by `--repeats` for a quantity that does not vary per
+repetition. A post-run window is not merely more expensive, it is impossible
+here: rows are flushed as each repetition completes, so a figure first known at
+the end cannot appear on rows already written. It would also not be comparable
+across cards, because the design fixes the work and lets the time vary, so a
+slow card idles hotter than a fast one by construction. Cold idle is the same
+measurement everywhere. Drift within a pod is therefore not captured; drift
+across the fleet is, since the sweep runs many pods per model.
+
+**The window clears the 30 s floor deliberately, at 60 s by default.** An idle
+trace is flat and low, which is exactly the regime where a cached reading
+(Yang et al., 2024) is indistinguishable from a real one, so this is the case
+that most needs the floor rather than the one that least does. `--idle-seconds`
+configures it, `--no-idle` skips it, and `--no-power` skips it automatically so a
+CPU smoke test still runs. A failure populates `idle_skip_reason` and is never
+raised: a missing idle figure is a gap in the carbon model, while a crash there
+would cost the whole pod's benchmark time.
+
+`summarize_runs.py` averages idle over **distinct observations, not over rows**,
+because one pod's figure is copied onto all of its rows and a mean over rows
+would weight a pod by how many repetitions it ran. `n_idle_observations` sits
+beside the mean for the same reason `n_physical_gpus` sits beside `n_runs`.
+
+**Never executed against NVML.** The whole path is CPU-tested only.
 
 ## Embodied carbon and grid intensity
 
@@ -842,25 +925,31 @@ question on hardware. What is left:
   commit. `k8s/arav-resnet-1080ti-job.yaml` sets both explicitly; the canonical
   template leaves `{{GIT_COMMIT}}` to the operator.
 
-### 3. Idle-power decision, before the sweep (CRITICAL, blocks Phase 6)
+### 3. Idle-power decision (DONE 2026-08-23, one check outstanding)
 
-Read `docs/tasks/phase8-break-even-inputs.md` first. Idle power is not measured
-anywhere, and the project premise is that an idle card never pays back a
-replacement. Adding idle sampling before the sweep is a few lines; after, it is a
-12 to 15 GPU-hour re-run. Decide the mechanism and implement it before Phase 6.
+`measure_idle()` in `measurement/runner.py`, two windows per pod split by CUDA
+context creation, 60 s each, reusing `PowerMonitor`. Mechanism and reasoning are
+in Output contract, "Idle power is recorded per pod, in two windows", and in
+Gap 1 of `docs/tasks/phase8-break-even-inputs.md`.
 
-### 4. Standardize the record schema, before the sweep (CRITICAL, blocks Phase 6)
+Outstanding: **it has never run against NVML.** The first GPU pod that uses it
+should confirm `idle_pre_context_avg_w` is in the region of the 55.03 W the
+1080 Ti preflight incidentally observed, that `idle_post_context_avg_w` is at or
+above it, and that `peak_w` is close to `avg_w` rather than far above it, which
+would mean a co-tenant was running and the window was not idle.
 
-Rows are only partly standardized: the runner spine is, the benchmark payloads
-are not. See "The record schema is convention, not enforcement" in Output
-contract for the drift and the derivation rule. Fix before the sweep, not after,
-for the same reason as idle power: a missing `inner_iters` or `work_hash_kind` is
-not re-derivable from JSONL and would cost a re-run. Decided approach is an
-enforced `WorkloadResult` dataclass, required fields as constructor arguments
-plus an `extra` dict, `.to_row()` in the runner, required set derived in Output
-contract. Touches all three `run()` signatures, like the timed-region change did,
-so it pairs naturally with landing that branch. Forces the llm `inner_iters`
-decision; interim value is 1.
+### 4. Standardize the record schema (DONE 2026-08-23)
+
+`benchmarks/_result.py` holds the enforced `WorkloadResult`; all three
+benchmarks return one and `runner.py` reads `.to_row()`. All three drifts are
+closed and llm reports `inner_iters=1`. What building it settled, including the
+three points the decision did not cover, is recorded in Output contract under
+"The record schema is convention, not enforcement, and it drifted".
+
+Outstanding: **no workload has been constructed on a GPU since the change.** The
+contract is unit-tested without torch, but the first GPU run after this must
+confirm that all three `run()` functions still return successfully, since a
+required field now raises where it previously wrote a null.
 
 ### 5. Cross-card reproducibility checks
 
@@ -897,11 +986,18 @@ assumptions.
 comparing the integral against the counter over a window below the 30 s floor
 measures the floor rather than the card.
 
-### 6b. Implement the measured sizing constants (blocks a clean sweep)
+### 6b. Implement the measured sizing constants (DONE 2026-08-23)
 
-Decided by measurement 2026-08-23, see Workload sizing: matmul `iters=2000`, a
-`--set`; resnet about 1000 batches, a module constant and so a code change.
-Until then every resnet run is below the 30 s floor and excluded.
+matmul `DEFAULT_ITERS` is 2000, raised from 200 so a forgotten `--set` cannot
+produce a sub-floor run. resnet's batch count is now a `run()` kwarg,
+`num_batches`, defaulting to 1000, with `warmup_batches` alongside it, and
+`_plan_indices` raises before the CIFAR-10 loader is built with an error naming
+the 1,557 measured-batch ceiling. See Workload sizing.
+
+Both defaults change `config_id` and `work_hash`, so rows recorded at the old
+sizes will not aggregate with new ones. That is the schema working, not a
+migration. Neither new default has run on a GPU, so the 90 s target is a
+prediction from the 3090 per-iteration figures and not yet an observation.
 
 ### 7. Phase 6, the sweep
 
@@ -932,9 +1028,11 @@ million while still looking plausible.
 ### Unclaimed side work, no ordering
 
 - **LLM `inner_iters`.** `llm_inference.py` runs one `generate()` per timed
-  region and reports no `inner_iters`. Whether it adopts the
-  repetition-inside-the-timed-region design is open for Veda and Aidan, and ties
-  to Workload sizing.
+  region and reports `inner_iters=1` as of 2026-08-23, which the record contract
+  forced to be an explicit choice rather than a missing column. Whether it
+  adopts the repetition-inside-the-timed-region design is still open for Veda
+  and Aidan, and ties to Workload sizing. It is also the only workload with no
+  measured sizing constant, since the 3090 figures cover matmul and resnet only.
 - **ruff config.** No `pyproject.toml` or `ruff.toml`, so `ruff check` enforces
   only defaults, not the type-hint, docstring or naming rules in Coding
   conventions. Adding one that actually checks them is unclaimed.
