@@ -328,6 +328,43 @@ the failure Yang et al. (2024) describe, and exactly what the retained sample
 trace exists to detect. The 3090's power numbers should not be trusted until
 `measurement/preflight.py` has been run against that model.
 
+### Preflight confirms it, on a 60 s synthetic load
+
+Run 2026-08-23 with `measurement/preflight.py` at `--power-seconds=60`, which is
+a different load from either benchmark and clears the 30 s floor:
+
+| GPU | integral | counter | disagreement | distinct values | min step | idle |
+|---|---|---|---|---|---|---|
+| RTX 2080 Ti | 17,866.658 J | 16,816.193 J | **+6.248%** | 303 / 321 | 0.001 W | 37.77 W |
+| RTX A4000 | 8,223.937 J | 8,298.132 J | -0.894% | 124 / 323 | 0.001 W | 16.52 W |
+
+The 2080 Ti figure is the **third independent confirmation** of its bias, after
+matmul at +6.94% and resnet at +6.57%. Three different loads, three durations,
+same direction and similar magnitude. Coarse quantisation is ruled out at
+0.001 W with 303 distinct values in 321 samples, and cached readings are ruled
+out by the same count. Which of the two figures to trust on Turing is unresolved
+and the paper has to address it rather than average them.
+
+The A4000 agrees to under 1% and in the same direction as the 1080 Ti's original
+whole-run check, so the 2080 Ti is an outlier among four cards, not a general
+problem with the method.
+
+Two incidental A4000 observations. It is the only card measured so far that
+stays under its power limit: peak 130.336 W against a 140 W cap, where the
+1080 Ti reached 313.6 W against 300 W and the 2080 Ti 286.8 W against 280 W. And
+its idle floor is 16.52 W against the 1080 Ti's 55.03 W, a 3.3x difference in
+precisely the quantity that decides whether a mostly-idle card ever repays a
+replacement.
+
+The A4000's 124 distinct values across 323 samples is less repetitive than the
+3090's 58 of 145 but well below the 2080 Ti's 211 of 224. Watch it for the
+cached-reading pattern under real workloads rather than assuming it is clean.
+
+The RTX 3090 has not been preflighted. Repeated attempts on 2026-08-23 could not
+obtain one: of five GPUs the availability feed reported free, pinning to
+individual nodes returned `Insufficient nvidia.com/gpu` on one and
+`Insufficient memory` on another, and the remaining two had zero free CPU.
+
 Practical consequence: run preflight per GPU model before its first measured
 run, and report the counter-against-integral agreement per card in the paper
 rather than quoting the 1080 Ti's 0.001% as representative.

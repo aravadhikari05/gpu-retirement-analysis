@@ -977,10 +977,17 @@ assumptions.
   at +6.94% and resnet at +6.57%, and it rules out both coarse quantisation and
   cached readings as the cause. Which of the two figures to trust on Turing is an
   open question the paper has to address.
-- **3090 and A4000: still outstanding.** The 3090 shows the cached-reading
-  signature in its benchmark traces and its preflight has been queued behind
-  cluster contention. Neither card's energy numbers should be used until this
-  runs.
+- **A4000: done 2026-08-23.** Agrees to -0.894% over 60 s, in the same
+  direction as the 1080 Ti, which makes the 2080 Ti an outlier among four cards
+  rather than a method problem. It is also the only card measured that stays
+  under its power limit, and it idles at 16.52 W against the 1080 Ti's 55.03 W.
+- **3090: still outstanding, and not for want of trying.** Of five GPUs the
+  availability feed reported free on 2026-08-23, none could be obtained. Pinning
+  to individual nodes returned `Insufficient nvidia.com/gpu` on one and
+  `Insufficient memory` on another, and the other two had zero free CPU. Its
+  benchmark traces show the cached-reading signature, so its energy numbers stay
+  unusable until this runs. A job is queued and will take the first card that
+  frees.
 
 `k8s/arav-preflight-job.yaml` now samples for 60 s rather than 20, because
 comparing the integral against the counter over a window below the 30 s floor
@@ -1001,7 +1008,8 @@ prediction from the 3090 per-iteration figures and not yet an observation.
 
 ### 7. Phase 6, the sweep
 
-Blocked on 2, 3, 4, 6 and 6b; item 1 is done. Fleet is the 1080 Ti, 2080 Ti,
+Blocked on 2, 6 and 5; items 1, 3, 4 and 6b landed on branch
+`schema-idle-sizing` (unmerged, and unverified on hardware). Fleet is the 1080 Ti, 2080 Ti,
 3090 and A4000, decided on reachability, and the framing change that implies
 needs Prof. Jullig's agreement first. Same-model variance (item 5) has to land
 before the output can be interpreted. 5 repetitions per model. Add a warmup-length axis to
