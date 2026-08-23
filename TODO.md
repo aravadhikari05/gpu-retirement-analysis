@@ -102,12 +102,24 @@ What accepting it costs, and what therefore has to be stated in methods:
 - Host energy is excluded on the operational side, which understates the slower
   card. Known direction, so state it.
 
-**One thing to carry into the framing conversation below.** This decision
-assumes NRP replaces cards inside existing chassis rather than retiring whole
-nodes. That assumption is the project's own, not something NRP has confirmed. If
-the framing conversation establishes that whole nodes are the real unit, this
-reopens and Phase 7 sources whole-system figures instead. Worth one sentence of
-confirmation there rather than a separate decision.
+**Checked against NRP's documentation 2026-08-23, and the decision stands with
+its reasoning changed.** Contribution to NRP is **node-level**: contributors
+supply a whole server, NRP supplies the OS and runs it. NRP never swaps a GPU or
+retires a node; the contributing institution owns the hardware and does the
+physical work. There is no published retirement policy at all.
+
+So node-scope would be equally defensible on NRP's own terms, and the GPU unit
+is a **modelling choice rather than an observed practice**. What supports it for
+this fleet is the hardware: 1080 Ti, 2080 Ti and 3090 are consumer PCIe cards in
+commodity servers, physically swappable in a way an SXM-socketed A100 is not.
+Treat node-level replacement as a sensitivity arm in Phase 9 rather than a
+closed question, and carry the caveat that a 2017-era node's CPU, RAM and PSU
+are aged too, which biases the GPU-only scope optimistic. Detail and sources in
+`CLAUDE.md` under "How NRP actually acquires hardware".
+
+**Phase 10 needs re-aiming.** `docs/phases.md` promises "a practical
+recommendation for NRP", but NRP does not make this decision. Address it to
+contributing institutions, with NRP as the context that sets utilisation.
 
 Two related boundaries in the same Gap, which need stating rather than solving:
 a card retired here may be redeployed elsewhere rather than scrapped, in which
@@ -184,17 +196,14 @@ there as they are established, not only in task docs.
 
 ## Decisions that need a human, not a computation
 
-### Confirm the framing with the prof
+### Framing: CONFIRMED 2026-08-23
 
-**This gates what the paper can claim and costs no GPU time.** The project was
-framed around replacing an ageing card with a modern datacenter GPU. Those are
-unreachable on Nautilus: quota bans the A100 class outright, reservation taints
-fence the L4, and contention accounts for the L40S and 4090. What is measurable
-is a consumer and workstation line from 2017 to 2021.
-
-That is still a real retirement question, plausibly the one an academic cluster
-actually faces, but it is a different one. Reasoning and evidence are in
-`docs/tasks/phase6-fleet-selection.md`.
+The consumer and workstation fleet is accepted as the paper's subject. It is
+what was measurable, the project is a time-boxed test project, and the
+limitation gets reported honestly rather than worked around. `CLAUDE.md` under
+Cluster environment holds why the modern datacenter cards are unreachable:
+namespace quota on the A100 class, reservation taints on the L4, contention on
+the L40S and 4090.
 
 ### Decide the results PVC name
 

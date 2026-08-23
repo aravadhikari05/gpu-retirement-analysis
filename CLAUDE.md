@@ -993,6 +993,59 @@ Units, written down once, since dropping the conversion is wrong by 3.6 million
 while still looking plausible:
 `carbon_saved_kg = (delta_energy_j * jobs / 3.6e6) * grid_intensity`.
 
+## How NRP actually acquires hardware, and who decides retirement
+
+Researched 2026-08-23 from NRP's own documentation. This settles the scope
+assumption behind the GPU-unit decision and corrects who the Phase 10
+deliverable is addressed to.
+
+**The unit of contribution is a whole server, not a GPU.** NRP's contributor
+guide: "Contributing a node to the NRP is a trade. You supply the hardware, the
+rack space, and the network path." NRP supplies "the operating system, joins the
+node to the Nautilus cluster, and runs it from there, patching, monitoring, and
+upgrades included", and scopes itself to "security from the OS up". Contributors
+keep priority on their own nodes and everyone else gets opportunistic access
+when they are idle, which is the mechanism this project has been scheduling
+against all along.
+
+**NRP therefore never replaces a GPU or retires a node. The contributing
+institution does.** NRP manages software; the hardware stays the owner's, down
+to physical work: the guide notes NRP "may ask you to reboot a node or swap a
+drive". The owner is the actor who would swap a card or retire a chassis.
+
+**No documented retirement or decommissioning policy exists.** Searched the
+admin docs, cluster policies and the 2025 architecture paper
+(arXiv:2505.22864). Nodes leaving the cluster are not covered anywhere public.
+That absence is itself reportable: it means there is no institutional guidance
+for the decision this project is studying.
+
+Three consequences:
+
+- **The GPU unit stands, but as a modelling choice rather than an observed
+  practice.** Contribution is node-level, so a whole-node scope would be equally
+  defensible on NRP's own terms. What supports the GPU unit for *this* fleet is
+  the hardware: the 1080 Ti, 2080 Ti and 3090 are consumer PCIe cards in
+  commodity servers, on the FIONA "low-cost, high-performance server-grade"
+  reference design, and a PCIe card is physically swappable in a way an
+  SXM-socketed A100 is not. State it as a choice, and treat node-level
+  replacement as a sensitivity arm rather than pretending the question is
+  settled.
+- **A caveat the paper has to carry:** a 2017-era node's CPU, RAM, PSU and PCIe
+  generation are also aged, so swapping only the GPU may not be realistic on the
+  oldest hardware even though it is physically possible. That biases the
+  GPU-only scope optimistic, which is the opposite direction from the
+  measurement biases.
+- **Phase 10 is addressed to the wrong audience as written.** `docs/phases.md`
+  promises "a practical recommendation for NRP". NRP does not make this
+  decision. The deliverable should target **contributing institutions** deciding
+  whether to swap cards or replace a node, with NRP as the context that sets
+  utilisation, not as the actor.
+
+Sources: <https://nrp.ai/documentation/admindocs/participating/new-contributor-guide/>,
+<https://nrp.ai/documentation/admindocs/links/hardware/>,
+<https://nrp.ai/about/>, <https://nrp.ai/documentation/userdocs/start/policies/>,
+<https://arxiv.org/abs/2505.22864>.
+
 ## Related work
 
 1. Gupta et al. (2022), ACT carbon modeling tool. Embodied carbon methodology.
