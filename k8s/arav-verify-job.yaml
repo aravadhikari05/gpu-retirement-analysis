@@ -1,0 +1,142 @@
+# Branch verification: all three workloads, one card, one pod. Owner: Arav.
+#
+# Exists to put the schema-idle-sizing branch on hardware for the first time.
+# Nothing on that branch has ever executed: the enforced WorkloadResult, the
+# idle-power windows, the new matmul and resnet sizing defaults, and the LLM's
+# 8 generations per timed region are all unverified. This runs them together so
+# one pod either clears the branch or does not.
+#
+# TEMPLATE. Render with envsubst, requires:
+#   RUN_NAME     unique job name, e.g. arav-verify-1080ti
+#   IMAGE        digest built from the branch head, NOT a tag. Read it off GHCR.
+#   GPU_PRODUCT  exact nvidia.com/gpu.product label
+#   GIT_COMMIT   full sha of the branch head, recorded as provenance
+#   CPU, MEM     see the sizing note below
+#
+# CHOOSING CPU AND MEM. Do not copy numbers from another job. Run
+# `python3 k8s/nrp_availability.py --model <product>` first: it reports free CPU
+# per node, and NRP's 1080 Ti nodes have repeatedly had plenty of free GPUs while
+# having almost no free RAM (5.6 Gi on one with 39 CPUs free). A request larger
+# than any open node's headroom leaves the pod Pending forever with a scheduler
+# message truncated at 1024 characters. Pinning kubernetes.io/hostname makes the
+# real reason readable.
+#
+# MEM specifically: gpt2-xl is a 6.43 GB fp32 checkpoint and transformers stages
+# it through host RAM before moving it to the device, so the LLM leg needs real
+# headroom. 16 Gi is the floor for the three-workload run and 8 Gi is known to
+# be enough for matmul and resnet alone. If no node has 16 Gi free, run the LLM
+# as a separate job rather than shrinking the request and risking an OOMKill
+# partway through a 25 minute pod.
+#
+# EXPECTED DURATION, all predictions and none of them measured:
+#   matmul  2000 iters  ~232 s     resnet  1000 batches  ~195 s
+#   llm     8 x 960 tok ~275 s     idle    3 x 120 s (two windows per invocation)
+#   plus roughly 60 s of gpt2-xl load from cephfs. Call it 25 minutes.
+#
+# WHAT TO CHECK IN THE ROWS AFTERWARDS:
+#   power_window == "region" on all three
+#   energy_j against energy_j_counter, per card, not assumed from another card
+#   the 11 idle_* fields populated, and idle_post_context above idle_pre_context
+#   work_hash_kind present: "config" on matmul and resnet, "output" on llm
+#   iterations_identical true on llm
+#   below_30s_floor false on all three, which is the point of the new sizing
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${RUN_NAME}
+  namespace: cmpm118
+  labels:
+    app: gpu-retirement
+    gpu-retirement/role: branch-verify
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: 5400
+  template:
+    metadata:
+      labels:
+        app: gpu-retirement
+        gpu-retirement/role: branch-verify
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: bench
+        image: ${IMAGE}
+        # The image ENTRYPOINT is measurement.runner, overridden to run three
+        # invocations. Defaults are deliberately NOT overridden: the new sizing
+        # constants are part of what is being verified, so --set carries only
+        # precision.
+        command: ["sh", "-c"]
+        args:
+        - |
+          set -e
+          echo "=== matmul, DEFAULT_ITERS ==="
+          python3 -m measurement.runner --benchmark matmul --repeats 1 \
+            --set precision=fp32 --out-dir /results
+          echo "=== resnet, DEFAULT_NUM_BATCHES ==="
+          python3 -m measurement.runner --benchmark resnet_train --repeats 1 \
+            --set precision=fp32 --out-dir /results
+          echo "=== llm, DEFAULT_INNER_ITERS on gpt2-xl 960 ==="
+          python3 -m measurement.runner --benchmark llm_inference --repeats 1 \
+            --set precision=fp32 --out-dir /results
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        # runner.py reads these from env and writes blanks without erroring if
+        # unset. The one L4 row in data/raw/runs/ has both empty for exactly
+        # that reason, so they are explicit here.
+        - name: IMAGE_REF
+          value: "${IMAGE}"
+        - name: GIT_COMMIT
+          value: "${GIT_COMMIT}"
+        # Matches aidan-llm-prep-job.yaml, which staged the cache. The module
+        # also sets both offline vars itself before importing huggingface_hub,
+        # and passes local_files_only=True, so this is belt and braces.
+        - name: HF_HOME
+          value: /models/hf
+        - name: HF_HUB_OFFLINE
+          value: "1"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: ${MEM}
+            cpu: "${CPU}"
+            ephemeral-storage: 16Gi
+          requests:
+            nvidia.com/gpu: 1
+            memory: ${MEM}
+            cpu: "${CPU}"
+            ephemeral-storage: 16Gi
+        volumeMounts:
+        # runs.jsonl, the power traces, and the staged CIFAR-10 under
+        # /results/data/cifar10, which resnet finds as a cache hit.
+        - name: results
+          mountPath: /results
+        # Aidan's pre-staged Hugging Face cache, 6.5 GB, holding gpt2 and
+        # gpt2-xl at their pinned revisions. Without this the LLM leg fails
+        # immediately: it reads local files only and never touches the network.
+        - name: models
+          mountPath: /models
+        # resnet_train uses DataLoader(num_workers=2) and the k8s default shm is
+        # 64 MB, which 224x224 batches exceed. Without this the worker is killed
+        # mid-run. num_workers is a module constant, not settable via --set.
+        # Note this tmpfs counts against the container memory limit.
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: results
+        persistentVolumeClaim:
+          claimName: matmul-results
+      - name: models
+        persistentVolumeClaim:
+          claimName: aidan-llm-models-pvc
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 2Gi
+      nodeSelector:
+        nvidia.com/gpu.product: ${GPU_PRODUCT}
