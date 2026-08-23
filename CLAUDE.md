@@ -283,6 +283,33 @@ values across 145 samples on matmul, and 27 across 79 on resnet, against 211 of
 trace exists to detect. Treat 3090 power as unverified until preflight has run
 on it. Detail in `paper/methods-notes.md`.
 
+**Confirmed across 50 fleet rows, 2026-08-23, and the 2080 Ti's bias is now
+beyond doubt.** Per-card and per-workload, integral against counter:
+
+| Card | matmul | resnet | llm |
+|---|---|---|---|
+| GTX 1080 Ti | -0.08% to +0.02% | **-0.74% to -7.72%** | -0.75% to -0.69% |
+| RTX 2080 Ti | +5.61% to +5.78% | +5.87% to +6.27% | +6.57% to +6.74% |
+| RTX A4000 | +0.02% to +0.08% | +0.01% to +0.05% | +0.02% to +0.08% |
+
+The 2080 Ti's gap now has five independent confirmations across three workloads
+and a 60 s preflight window, clustered tightly at 5.6 to 6.9%. It is a
+systematic per-card bias, not a method problem, and which of the two figures to
+trust on Turing is still an open question the paper has to address.
+
+**New and unexplained: the 1080 Ti disagrees on resnet only.** Same card, same
+pod, same session: matmul agrees to 0.08% and llm to 0.75%, while resnet swings
+from -0.74% to -7.72%. The counter is stable across repetitions (41.6 to
+44.0 kJ) while the integral is the noisy term (38.4 to 43.7 kJ), and the 1080 Ti
+resnet energy standard deviation is 5.2% against roughly 0.3% everywhere else.
+Ruled out: cached readings (distinct-to-sample ratio 0.99) and coarse
+quantisation. The leading hypothesis is that 0.2 s sampling aliases resnet's
+spiky per-batch power trace on this card, where matmul's flat sustained load
+samples cleanly. **Unresolved. Do not report 1080 Ti resnet energy without
+saying which of the two figures was used and why.** If the fix is a shorter
+sampling interval, that is a code change and a new image digest, which would
+separate any re-run from these 50 rows.
+
 Still unverified on every other GPU model.
 
 ### Energy is scoped to the timed region, not the whole run
@@ -328,9 +355,10 @@ counter-versus-integral cross-check.
 Verified on CPU with synthetic traces: a constant 200 W trace over a carved
 region integrates exactly (7000 J over 35 s), boundary interpolation is exact on
 a ramp (9000 J), the counter delta is region-scoped, and an unmarked run still
-reports the whole window. **The region path has never run on a GPU.** The first
-hardware run must confirm the region counter delta still agrees with the region
-integral, the way the whole-run versions did.
+reports the whole window. **The region path was confirmed on a GPU 2026-08-23**,
+on 50 rows across three cards and three workloads: `power_window` is `region` on
+every one, and the region counter delta agrees with the region integral to
+within the per-card figures in the Measurement contract.
 
 ## Library version traps
 
@@ -429,14 +457,15 @@ Doing exactly that predicted the L4 at 14 s against an actual 32.87 s, because
 gpt2 and gpt2-xl sit in different regimes (compute bound against bandwidth
 bound).
 
-**Nothing cross-model can be interpreted until same-model variance is known.**
-Every energy figure the project holds is n=1 on one physical card per model. If
-two 1080 Tis differ from each other by 15%, the measured 1.40x between a 1080 Ti
-and a 2080 Ti means something very different than if they differ by 1%. This has
-been an open question in this file since 2026-08-11 and no workload has tested
-it. It is now a prerequisite for reading Phase 6 output, not a nice to have, and
-it is unblocked: the 1080 Ti has more reachable free capacity than any other
-model. Design in `docs/tasks/phase6-fleet-selection.md`.
+**Cross-model differences are bounded by same-model variance, now measured at
+6.43% on one card pair.** This was an open question in this file from
+2026-08-11 until 2026-08-23, when two A4000s in the same node happened to differ
+by that much while repeating within themselves to 0.30%. Differences comfortably
+above it, which includes every matmul and llm ratio the project reports, stand.
+Differences near or below it do not. Full figures and the caveats are under
+"Same-model variance is real" in this section; the study that would answer it
+properly is designed in `docs/tasks/phase6-fleet-selection.md` and was
+descoped.
 
 **The fixed-work premise holds across four architectures.** Measured
 2026-08-23: matmul's `work_hash` is byte-identical on the GTX 1080 Ti (sm 6.1),
@@ -469,6 +498,73 @@ The image that produced all of the above was built from the pre-2026-08-13
 Dockerfile: `nvidia/cuda:12.1.0-runtime-ubuntu22.04` with the cu121 index URL.
 Any image change has to preserve that or the 1080 Ti results are not
 reproducible.
+
+### First fleet pass, 2026-08-23 (Arav, `9e6ce60`)
+
+3 cards x 3 workloads x 5 repetitions, image digest
+`sha256:9e62c0de`, 50 analysable rows. Read them through
+`analysis/fleet_subset.py`, not by hand: it applies the three selection rules
+(current sizing by `config_id`, no `exclusion_reason`, above the floor) and
+warns per workload and model where a standard deviation comes from one physical
+card.
+
+Mean energy per repetition, identical work within each workload:
+
+| Workload | GTX 1080 Ti | RTX 2080 Ti | RTX A4000 |
+|---|---|---|---|
+| matmul | 63,926 J / 285.2 s | 35,629 J / 205.6 s | 28,648 J / 205.2 s |
+| resnet | 40,367 J / 201.1 s | 23,847 J / 139.6 s | 22,289 J / 161.3 s |
+| llm | 46,754 J / 329.0 s | 33,337 J / 187.7 s | 28,077 J / 200.9 s |
+
+**The energy ratio exceeds the speed ratio in every card and every workload.**
+On matmul the A4000 uses 2.23x less energy than the 1080 Ti while being only
+1.39x faster; on resnet, 1.81x less at 1.25x faster. This is the n=5 version of
+the n=1 finding above, and it is the project's central result: the replacement
+case rests on power draw, not throughput.
+
+**`work_hash` is identical across all three architectures for all three
+workloads**, sm_61, sm_75 and sm_86. For the LLM this is at the full 960-token
+length and the hash is `output`-kind, so it proves bit-identical generated
+tokens across architectures, not merely that the same work was requested. That
+closes the 960-token agreement question open since 2026-08-11. matmul and resnet
+remain `config`-kind and prove only identical requested work, which is the
+distinction `work_hash_kind` exists to carry.
+
+### Same-model variance is real, and it is roughly 21x the run-to-run noise
+
+**Measured incidentally, 2026-08-23, and it bounds every cross-model claim the
+project makes.** The A4000's LLM repetitions landed on two different physical
+cards in the same node, `ry-gpu-16`, which is the only card-to-card comparison
+the project has ever had:
+
+| | mean energy | n | within-card spread |
+|---|---|---|---|
+| `GPU-5900f3b3` | 29,565.7 J | 1 | not measurable |
+| `GPU-d09bcb58` | 27,779.3 J | 5 | 84.3 J, 0.30% |
+
+**Between-card difference 6.43%, within-card spread 0.30%.** Same node, so
+co-tenants, cooling and ambient are largely controlled and the gap is the cards
+themselves.
+
+The consequence for the paper: **a cross-model difference below about 6% cannot
+be distinguished from card-to-card variance.** The matmul and llm ratios (1.69x
+to 2.23x) clear that easily and stand. The 7.0% resnet gap between the 2080 Ti
+and the A4000 does not, and must not be reported as a real difference.
+
+This is one observation against n=1, not a confidence interval. It establishes
+that the effect exists and roughly bounds it. It does not replace the study
+designed in `docs/tasks/phase6-fleet-selection.md`, which was descoped by
+decision on 2026-08-23; state that as a limitation rather than implying the
+variance question is closed.
+
+### The LLM reloads the model on every repetition
+
+Measured 2026-08-23. `runner.py` calls `module.run()` once per repetition and
+`llm_inference` loads gpt2-xl inside `run()`, so a 5 repetition pod pays the
+load five times. On the 1080 Ti each repetition is roughly 378 s: model load,
+one warmup iteration, then a 329 s timed region. The load is outside the timed
+region so no energy figure is wrong, but any wall-clock estimate that assumes
+one load per pod is low by about 30%. Budget from the per-repetition figure.
 
 ## Workload sizing
 
@@ -543,6 +639,18 @@ is a re-derive, not a 12-hour re-run of the sweep.
 **Grain is one row per repetition.** That is both the unit of exclusion (below
 the floor, or crashed) and the unit of independence for a standard deviation.
 Anything finer lives inline as a list, or beside the row in the power trace CSV.
+
+**`analysis/fleet_subset.py` is the one definition of the analysable slice.**
+Added 2026-08-23. `runs.jsonl` is append-only and now spans four commits and
+three sizing generations, so most work wants a subset of it. Selecting by hand
+invites two mistakes that look identical in a table: pooling two sizing
+generations, and including an excluded run. The module applies three rules
+(`config_id` in `KEEP_CONFIGS`, empty `exclusion_reason`, `below_30s_floor` is
+`False`), writes `data/processed/fleet_runs.{jsonl,csv}`, and warns per workload
+and model wherever the rows come from one physical card. After a sizing change
+it selects nothing and exits with an error naming `KEEP_CONFIGS`, rather than
+writing an empty table a later step would read as "no runs happened". Add the
+new `config_id` there; do not loosen the match to a workload name.
 
 **Two loops, named apart.** `repeat_index` is the runner's `--repeats`, the
 outer loop for statistical spread. `inner_iters` is the workload's own loop
@@ -816,19 +924,20 @@ still blocking, and the workloads were built in the reverse of this order.
 ## Current state
 
 Verified against the repo on 2026-08-18, updated 2026-08-22 for Veda's
-`2dc4e7e` (Phase 5) and Aidan's `32a1ee5` (census reachable capacity).
+`2dc4e7e` (Phase 5) and Aidan's `32a1ee5` (census reachable capacity), and
+again 2026-08-23 for the first fleet pass (Arav, `9e6ce60`).
 Phase numbers follow `docs/phases.md`.
 
 | Phase | Status | Evidence |
 |---|---|---|
 | 1 Census | Done | `data/processed/census_fleet.csv`, `census_nodes.csv`, `k8s/inventory.sh`, `k8s/summarize_census.py`. Task doc is `docs/tasks/phase0-census.md`; the filename says phase0 but the work is Phase 1. |
 | 2 Container | **Done, verified on hardware** | `nvidia/cuda:12.1.0-runtime-ubuntu22.04`, pinned `torch==2.5.1` / `torchvision==0.20.1`, installs from `requirements.txt`, copies both packages. Built and pulled on a 1080 Ti 2026-08-18. Open: which registry is authoritative, see below. |
-| 3 Workloads | Written, all 3 have run on a GPU | All three emit `work_hash` and set TF32 explicitly and `config_id`. matmul measured on 4 cards and resnet on 3 (2026-08-23, `data/raw/runs/`), `work_hash` identical across all of them. LLM measured only outside the runner, `data/raw/llm_smoke/`, so it still has no `energy_j`. Sizing constants for matmul and resnet are decided but not implemented. |
-| 4 Power | Working end to end on 4 GPU models | Region scoping verified on hardware across 1080 Ti, 2080 Ti, 3090 and L4; 7 rows in `data/raw/runs/`. Counter-against-integral agreement is per-card and ranges from -0.001% to +6.94%; the 3090 shows the cached-reading signature. Preflight has run on the 1080 Ti only. Never attached to the llm workload. |
+| 3 Workloads | **Done, all 3 measured through the runner with power** | All three emit `work_hash`, set TF32 explicitly, carry `config_id`, and return an enforced `WorkloadResult`. All three ran 5 repetitions on the 1080 Ti, 2080 Ti and A4000 on 2026-08-23. Sizing constants implemented and verified on hardware. The LLM now has `energy_j`, which was its last gap. |
+| 4 Power | **Working end to end on all 3 fleet cards, all 3 workloads** | Region scoping, idle power and the enforced record all verified on hardware 2026-08-23. Counter-against-integral agreement is per-card and per-workload: see the Measurement contract. Preflight done on 1080 Ti, 2080 Ti and A4000; still outstanding on the 3090, which is out of the fleet. |
 | 5 Storage | **Done** (Veda, 2026-08-20, `2dc4e7e`) | `k8s/benchmark-pod.yaml` is a real templated pod: both PVCs mounted, `NODE_NAME` / `IMAGE_REF` / `GIT_COMMIT` env, `HF_HOME=/models/hf`, `HF_HUB_OFFLINE=1`, `nodeSelector` on `nvidia.com/gpu.product`, args matching the runner CLI. `k8s/results-pvc.yaml` is the canonical results claim (live name `matmul-results`) and `k8s/STORAGE.md` documents the volume layout. |
-| 6 Sweep | Not started, fleet decided | Fleet is 1080 Ti, 2080 Ti, 3090 and A4000, on reachability grounds; see `docs/tasks/phase6-fleet-selection.md`, and the framing change it implies needs adviser sign-off. Blockers: idle power, the record schema, the sizing constants, preflight on 3090 and A4000, and same-model variance before any result can be read. |
-| 7 Embodied carbon | Not started | Every figure is an unsourced placeholder. Blocks Phase 8. |
-| 8 Carbon model | Scoped, not built | `analysis/summarize_runs.py` prepares the input table. `carbon_model.py` does not exist; its required inputs are reviewed in `docs/tasks/phase8-break-even-inputs.md`. |
+| 6 Sweep | **First fleet pass done, 2026-08-23** | 3 cards (1080 Ti, 2080 Ti, A4000) x 3 workloads x 5 repetitions, 50 analysable rows in `data/raw/runs/runs.jsonl`, selected by `analysis/fleet_subset.py` into `data/processed/fleet_runs.{jsonl,csv}`. No 3090, by decision. Every gate passed. Two things it is not: the framing is still unconfirmed with Prof. Jullig, and same-model variance is measured for exactly one card pair, so cross-model differences below about 6% are not interpretable. |
+| 7 Embodied carbon | **Not started, and now the critical path** | Every figure is an unsourced placeholder. Blocks Phase 8. The energy side is done, so this is the only thing between the project and a break-even number. |
+| 8 Carbon model | Scoped, not built | `analysis/summarize_runs.py` and `analysis/fleet_subset.py` prepare the input tables. `carbon_model.py` does not exist; its required inputs are reviewed in `docs/tasks/phase8-break-even-inputs.md`. |
 | 9 to 10 | Not started | `paper/methods-notes.md` already holds real measured content. |
 
 GPU workloads are no longer restricted. The earlier "read-only census, do not
@@ -861,24 +970,35 @@ not building the pod image.
 
 ### What is still unverified
 
-- **Preflight has run on the GTX 1080 Ti only**, and two cards have now produced
-  suspicious power data without it: the 2080 Ti's 7% counter bias and the 3090's
-  cached-reading signature. Run preflight on 2080 Ti, 3090 and A4000 before their
-  numbers are used. L4, L40S and 4090 are currently unreachable.
-- `resnet_train.py` has never run on a GPU. Syntax and lint only. Neither its
-  `work_hash` nor matmul's has been compared across two cards.
-- Timed-region scoping is confirmed on four cards and two workloads. Still
-  unconfirmed for llm, which has never run through the runner with power.
-- Every energy figure is n=1 on one physical card per model. No variance
-  estimate exists, and card-to-card variation within a model is still unmeasured.
-- All three resnet runs and the 3090 matmul run fell below the 30 s floor and are
-  excluded. Their energy figures are recorded but not trustworthy.
-- **Image and commit provenance has never actually been recorded.** The one real
-  runner row carries `image_ref` and `git_commit` as empty strings, because the
-  pod did not set them and `runner.py` accepts blanks silently. The Output
-  contract lists both as the columns that forbid comparing runs built from
-  different images, and so far they forbid nothing. Every pod must set them, and
-  the runner should arguably refuse to write a row without them.
+Rewritten 2026-08-23 after the first fleet pass. Most of what stood here is now
+closed; what remains is listed honestly rather than deleted.
+
+Closed by the fleet pass: preflight on the 2080 Ti and A4000, resnet on a GPU,
+timed-region scoping for llm, llm energy, image and commit provenance on every
+row, and the sub-floor problem, which the new sizing constants fixed.
+
+Still open:
+
+- **The 3090 has never been preflighted**, and its two rows show the
+  cached-reading signature, so its energy figures stay unusable. It is out of
+  the fleet by decision, so this only matters if it is added back.
+- **Same-model variance is measured for exactly one card pair**, the two A4000s
+  above, and only on the llm workload. Every other model in the fleet is one
+  physical card, so its standard deviation is run-to-run noise. The designed
+  study in `docs/tasks/phase6-fleet-selection.md` was descoped on 2026-08-23 and
+  is a stated limitation, not a closed question.
+- **The 1080 Ti resnet counter-versus-integral gap is unexplained.** See the
+  Measurement contract.
+- **The framing has not been confirmed with Prof. Jullig.** The fleet is a
+  consumer and workstation line from 2017 to 2021, not the modern datacenter
+  GPUs the project was framed around. This gates what the paper can claim and
+  costs no GPU time.
+- **L4, L40S, 4090 and every A100 class card remain unreachable.** Quota,
+  reservation taints and contention, with different remedies each; see Cluster
+  environment.
+- **The results PVC is still named `matmul-results`** and now holds three
+  workloads. Keep and explain in methods, or migrate. Migrating gets more
+  expensive with every run.
 
 ### k8s plumbing, landed 2026-08-20
 
@@ -898,13 +1018,35 @@ it, which is documentation rather than deletion.
 
 ## To-do list, in pickup order
 
-Written 2026-08-18, revised 2026-08-22 against teammates' commits. Item 1 is
-closed and item 2 is half closed; nothing below has been renumbered, so links to
-"to-do #N" still point where they did. Ordered by the critical path: each
-blocked item names what unblocks it. Owners are suggestions from this file's
-existing assignments, not fixed. Before starting any item, check `git log` and
-live Nautilus pod and PVC state, per the hard rule about stubs and teammates'
-in-progress work.
+Written 2026-08-18, revised 2026-08-22 against teammates' commits, revised again
+2026-08-23 after the first fleet pass. Items 1 through 7 are now closed; nothing
+has been renumbered, so links to "to-do #N" still point where they did. Ordered
+by the critical path: each blocked item names what unblocks it. Owners are
+suggestions from this file's existing assignments, not fixed. Before starting
+any item, check `git log` and live Nautilus pod and PVC state, per the hard rule
+about stubs and teammates' in-progress work.
+
+**Where the project actually stands, 2026-08-23.** The measurement half is done:
+three workloads, three cards, five repetitions, every gate passed, energy scoped
+to the timed region, idle power recorded, provenance on every row. Nothing
+downstream is blocked on more GPU time.
+
+**The critical path is now item 8, embodied carbon, and it needs no cluster
+access at all.** Until a kg CO2e figure exists for the 2080 Ti and the A4000,
+there is no break-even number and items 9 and 10 cannot start. Everything else
+below is parallelisable.
+
+Three pieces of work that can run at the same time, by whoever picks them up:
+
+| Work | Needs | Blocks |
+|---|---|---|
+| 8, embodied carbon | Desk research only | 9, then 10 |
+| Adviser sign-off on the framing | A conversation | What the paper claims |
+| The 1080 Ti resnet counter gap | The 50 rows, already committed | Whether that row's energy is reportable |
+
+Two things anyone touching the data should read first: `analysis/fleet_subset.py`
+is the one definition of the analysable slice, and the same-model variance
+finding above bounds what any cross-model comparison is allowed to claim.
 
 ### 1. Phase 5, k8s storage: DONE (Veda, 2026-08-20, `2dc4e7e`)
 
@@ -924,46 +1066,64 @@ Residual, small, not blocking:
   build. Container builds says reference by digest. Substitute a digest for sweep
   runs.
 
-### 2. Finish the first-GPU-run validation (CRITICAL, partly done)
+### 2. Finish the first-GPU-run validation: DONE (Arav, 2026-08-23, `9e6ce60`)
 
 Veda ran matmul on an L4 through `runner.py` with power on 2026-08-19. The row
 and its power trace are now in `data/raw/runs/` (pulled 2026-08-23, md5 matched
 against the PVC, PVC copy left in place) and the figures check out when
 recomputed: `power_window=region`, integral against counter 0.198%,
 `power_duration_s` within 6.1 ms of `runtime_s`. That closes the timed-region
-question on hardware. What is left:
+question on hardware.
 
-- **Done 2026-08-23 for matmul and resnet** across 1080 Ti, 2080 Ti and 3090,
-  plus the L4 matmul row. Remaining: **llm through the runner with power**, which
-  is now the only workload with no `energy_j`.
-- **`docs/tasks/overnight-fleet-run.md` is the runbook for closing this**, and
-  for the first 5 repetition fleet pass behind it. It gates the fleet on a 15
-  minute, 1 repetition verification, because nothing on branch
-  `schema-idle-sizing` has executed on hardware: the enforced `WorkloadResult`,
-  both idle-power windows, the matmul and resnet sizing defaults and the LLM's 8
-  generations per timed region are all unverified. It also carries the repair
-  authority boundary: configuration failures may be fixed in place, a traceback
-  out of `benchmarks/` or `measurement/` stops the run.
-- Re-run matmul and resnet above the 30 s floor once the sizing constants below
-  are implemented. Everything except three matmul rows is currently excluded.
-- **Set `IMAGE_REF` and `GIT_COMMIT` on every pod.** Both are empty on the L4
-  row. `runner.py` reads them from env and writes blanks without complaint, so
-  the only real measured run in the repo cannot be tied to an image digest or a
-  commit. `k8s/arav-resnet-1080ti-job.yaml` sets both explicitly; the canonical
-  template leaves `{{GIT_COMMIT}}` to the operator.
+**All of it is closed as of 2026-08-23** by the first fleet pass, which followed
+`docs/tasks/overnight-fleet-run.md` end to end. All three workloads ran through
+`runner.py` with power on three cards; llm has `energy_j`; the sizing constants
+put every row above the 30 s floor; and `IMAGE_REF` and `GIT_COMMIT` are set on
+every one of the 50 rows. The L4 row from 2026-08-19 is still the one record in
+the repo with empty provenance, and stays that way as a historical artifact.
 
-### 3. Idle-power decision (DONE 2026-08-23, one check outstanding)
+`runner.py` still accepts blank `image_ref` and `git_commit` without complaint.
+Making it refuse is unclaimed work: the Output contract lists both as the
+columns that forbid comparing runs built from different images, and a silent
+blank defeats that.
+
+### 3. Idle-power decision: DONE 2026-08-23, and verified on hardware
 
 `measure_idle()` in `measurement/runner.py`, two windows per pod split by CUDA
 context creation, 60 s each, reusing `PowerMonitor`. Mechanism and reasoning are
 in Output contract, "Idle power is recorded per pod, in two windows", and in
 Gap 1 of `docs/tasks/phase8-break-even-inputs.md`.
 
-Outstanding: **it has never run against NVML.** The first GPU pod that uses it
-should confirm `idle_pre_context_avg_w` is in the region of the 55.03 W the
-1080 Ti preflight incidentally observed, that `idle_post_context_avg_w` is at or
-above it, and that `peak_w` is close to `avg_w` rather than far above it, which
-would mean a co-tenant was running and the window was not idle.
+**Ran against NVML for the first time 2026-08-23, on 14 pod-level observations
+across three cards. It works, and it falsified the figure it was going to be
+checked against.**
+
+| Card | `idle_pre_context` | `idle_post_context` |
+|---|---|---|
+| GTX 1080 Ti | 8.75 to 17.39 W | 24.10 to 25.80 W |
+| RTX 2080 Ti | 5.97 to 23.00 W | 19.83 to 33.70 W |
+| RTX A4000 | 15.52 to 19.73 W | 25.06 to 29.36 W |
+
+`idle_post_context` is above `idle_pre_context` on every one of the 50 rows,
+which is the ordering the two windows were built to expose: a live CUDA context
+and allocator cost real watts on an otherwise unused card.
+
+**The 55.03 W this section expected is wrong, or is not an idle figure.** A
+1080 Ti measured here idles at 8.75 W with no context and about 25 W with one,
+which is a factor of 5.7 below it. The 55.03 W came from the 2026-08-18
+preflight on `k8s-gpu-2` and reads as the minimum of a load trace rather than a
+dedicated idle window. **Resolve which it is before any idle number reaches the
+paper**, because idle draw is the term the whole project premise rests on: a
+card that is idle most of the time never pays back a replacement. If 55.03 W is
+a real idle floor on a different physical 1080 Ti, that is a second and much
+larger same-model variance result. If it is a load-trace minimum, this file has
+been quoting a load figure as an idle figure since 2026-08-18.
+
+One caveat on these windows. `idle_pre_context_peak_w` reaches 64 to 73 W on
+every card while the averages sit under 25 W, so co-tenant activity is landing
+inside the idle windows on shared nodes. The average is still low enough to be
+credible, but the peak is the documented tell that the window was not
+exclusively ours, and it is why `idle_*_peak_w` is recorded at all.
 
 ### 4. Standardize the record schema (DONE 2026-08-23)
 
@@ -982,16 +1142,20 @@ required field now raises where it previously wrote a null.
 
 - **Done 2026-08-23 for matmul (4 cards) and resnet (3 cards).** Both hashes are
   identical across architectures. See Established results.
-- **Same-model variance is now a prerequisite of Phase 6, not an optional
-  check.** No workload has ever compared two physical cards of the same model,
-  and every energy figure is n=1, so no cross-model difference can be read yet.
-  Do it on the 1080 Ti, which has the most reachable free capacity: matmul, above
-  the floor, 5 repetitions on each of at least 5 distinct `gpu_uuid` values
-  across as many nodes as possible, reporting within-card and between-card spread
-  separately. Design in `docs/tasks/phase6-fleet-selection.md`. Unblocked today.
-- Still open: LLM `work_hash` at the full 960-token length across two cards.
+- **LLM `work_hash` at 960 tokens: closed 2026-08-23.** Identical across three
+  architectures, sm_61, sm_75 and sm_86, and it is the `output`-kind hash. See
+  Established results.
+- **Same-model variance: descoped by decision 2026-08-23, and partially answered
+  by accident.** The designed study in `docs/tasks/phase6-fleet-selection.md`
+  (matmul, 5 repetitions on each of at least 5 distinct `gpu_uuid` values) was
+  **not run**: node pinning was dropped from scope, the project being a
+  time-boxed undergraduate one, and the shortfall goes in the presentation as a
+  limitation. What exists instead is one accidental card pair, two A4000s in the
+  same node on the llm workload, differing by 6.43% against a 0.30% within-card
+  spread. That is enough to bound cross-model claims and not enough to close the
+  question. The design stays on file for anyone who picks it up.
 
-### 6. Preflight each GPU model before its first measured run (now urgent)
+### 6. Preflight each GPU model before its first measured run (fleet done)
 
 `measurement/preflight.py` is per-card and has already falsified two documented
 assumptions.
@@ -1033,14 +1197,27 @@ sizes will not aggregate with new ones. That is the schema working, not a
 migration. Neither new default has run on a GPU, so the 90 s target is a
 prediction from the 3090 per-iteration figures and not yet an observation.
 
-### 7. Phase 6, the sweep
+### 7. Phase 6, the sweep: FIRST PASS DONE (Arav, 2026-08-23, `9e6ce60`)
 
-Blocked on 2, 6 and 5; items 1, 3, 4 and 6b landed on branch
-`schema-idle-sizing` (unmerged, and unverified on hardware). Fleet is the 1080 Ti, 2080 Ti,
-3090 and A4000, decided on reachability, and the framing change that implies
-needs Prof. Jullig's agreement first. Same-model variance (item 5) has to land
-before the output can be interpreted. 5 repetitions per model. Add a warmup-length axis to
-the sizing sweep rather than cutting warmup on an assumption; see Workload sizing.
+3 cards x 3 workloads x 5 repetitions, every gate passed, 50 analysable rows.
+Results in Established results; read them through `analysis/fleet_subset.py`.
+`schema-idle-sizing` is merged.
+
+What the pass deliberately did **not** do, so nobody assumes otherwise:
+
+- **No node pinning**, so repetitions landed on one physical card per model,
+  with the single A4000 llm exception. Descoped by decision.
+- **No warmup-length axis.** Worth revisiting cheaply: warmup was measured at
+  `warmup_iters=10` against 2000 measured iters for matmul and 5 batches against
+  1000 for resnet, so it is about 0.5% of the compute budget, not the half this
+  file previously assumed. The risk is that 10 iterations is too **short** to
+  reach thermal and clock steady state, which is the opposite of the concern
+  that was written down. Cheap to test, and energy is the dependent variable.
+- **No 3090.**
+
+A re-run is plausible rather than unlikely, since the framing is unconfirmed and
+same-model variance is barely sampled. Treat these rows as a real dataset that
+may need repeating, not as final.
 
 ### 8. Phase 7, embodied carbon (blocks Phase 8)
 
@@ -1061,6 +1238,16 @@ million while still looking plausible.
 `analysis/sensitivity.py` and `analysis/plots.py`. Not started.
 
 ### Unclaimed side work, no ordering
+
+- **The CI workflow still lists `schema-idle-sizing` as a build trigger branch.**
+  The workflow comment says to remove it once the branch lands. It landed
+  2026-08-23. Note any change under `Dockerfile`, `benchmarks/` or
+  `measurement/` on `main` triggers a 22 minute build and moves `:latest`, which
+  `k8s/interactive.yaml` and `k8s/sample_job.yaml` both pull.
+- **`k8s/benchmark-pod.yaml` still pins `{{IMAGE}}` to a tag.** Container builds
+  says reference by digest. The fleet pass used
+  `sha256:9e62c0de6a56b995a1de66269cb1d26666f099390fb90c83e7aaca9f360877e4`
+  explicitly for this reason. Substitute a digest for any measured run.
 
 - **LLM `inner_iters`: closed 2026-08-23.** Set to 8, chosen from the measured
   L40S runtime plus margin rather than from a 3090 measurement, since no 3090

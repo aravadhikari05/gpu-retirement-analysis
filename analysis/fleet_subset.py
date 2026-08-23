@@ -25,6 +25,12 @@ Nothing is deleted from the raw file. The excluded runs are evidence about what
 the old sizing did and why it was changed, and `data/raw/` is the source of
 truth.
 
+All three workloads are in scope. They are not directly comparable to each
+other: matmul and resnet hash their inputs and the shape of the work, while the
+LLM hashes its generated tokens, so only the LLM's work_hash proves the output
+was bit-identical. Compare within a workload, and read work_hash_kind before
+reading work_hash.
+
 Two outputs, same rows, because the consumers differ:
 
   <name>.jsonl  full records including list-valued fields such as the per-batch
@@ -48,10 +54,15 @@ logger = logging.getLogger(__name__)
 KEEP_CONFIGS = (
     "matmul|n8192|fp32|i2000|s20260818",
     "resnet50|cifar10|fp32|b32|n1000|s20260818",
+    # The LLM carries i8 in its config_id, so a 1 iteration run can never pool
+    # with an 8 iteration one. Its work_hash is output-kind while the other two
+    # are config-kind, which is why work_hash_kind travels with every row rather
+    # than being inferred from the workload name.
+    "gpt2-xl|15ea56dee5df|fp32|b1|n960|i8|p72ef35ff2d6d",
 )
 
 DEFAULT_RUNS = "data/raw/runs/runs.jsonl"
-DEFAULT_OUT_PREFIX = "data/processed/fleet_matmul_resnet"
+DEFAULT_OUT_PREFIX = "data/processed/fleet_runs"
 
 
 def load_runs(path: str) -> list[dict]:
@@ -213,17 +224,30 @@ def main() -> None:
     # aggregate step warns about this too, but the warning belongs here as well
     # because this file is what gets handed to a plot or a spreadsheet, where
     # nothing else carries the caveat.
-    by_model: dict[str, set] = {}
+    # Keyed by workload as well as model. A model can have two physical cards
+    # across the file while still having only one within a given workload, which
+    # is exactly the A4000's situation: its LLM rows span two cards and its
+    # matmul and resnet rows do not. Checking per model alone would clear the
+    # A4000 and hide that.
+    by_model: dict[tuple[str, str], set] = {}
     for run in kept:
-        by_model.setdefault(run.get("gpu_model_observed", "?"), set()).add(
-            run.get("gpu_uuid")
-        )
-    for gpu_model, uuids in sorted(by_model.items()):
+        key = (run.get("workload", "?"), run.get("gpu_model_observed", "?"))
+        by_model.setdefault(key, set()).add(run.get("gpu_uuid"))
+    for (workload, gpu_model), uuids in sorted(by_model.items()):
         if len(uuids) == 1:
             logger.warning(
-                "%s: all selected rows are one physical card. Spread within "
-                "this model is run-to-run noise, not card-to-card variation.",
+                "%s on %s: all selected rows are one physical card. Spread "
+                "here is run-to-run noise, not card-to-card variation.",
+                workload,
                 gpu_model,
+            )
+        else:
+            logger.info(
+                "%s on %s: %d physical cards, so between-card spread is "
+                "measurable here.",
+                workload,
+                gpu_model,
+                len(uuids),
             )
 
 
