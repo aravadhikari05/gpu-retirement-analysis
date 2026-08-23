@@ -64,10 +64,44 @@ matter how many jobs are submitted.
 after the timed region, recorded as `idle_watts_pre` and `idle_watts_post`.
 Roughly 30 seconds per run. Cheap now, impossible to add retroactively.
 
+**Implemented 2026-08-23, and the shape changed from that proposal.**
+`measurement/runner.py` now has `measure_idle()`, called once per pod before the
+first repetition, reusing `measurement/power_monitor.py` rather than sampling
+separately. Three departures from the proposal above, each for a reason:
+
+- **Two windows split by CUDA context, not by run position.** Idle before any
+  CUDA context exists and idle with a live context but no work are different
+  quantities, and the second is the one the project premise is about: an NRP pod
+  holding a GPU it is not using. Columns are `idle_pre_context_*` and
+  `idle_post_context_*`. Neither includes the benchmark's model load, so neither
+  covers the power cost of resident weights; that is a stated scope boundary.
+- **Once per pod, not once per run.** Rows are written as each repetition
+  completes, so a post-run figure could not appear on rows already flushed. A
+  post-run window would also not be comparable across cards: the design fixes
+  the work and lets the time vary, so a slow card is hotter for longer before
+  its reading than a fast one. Cold idle is the same measurement everywhere.
+- **60 s per window, not 30.** The window has to clear the Yang et al. (2024)
+  floor with margin rather than sit on it. Idle traces are flat and low, which
+  is exactly the regime where a cached reading is indistinguishable from a
+  plausible real one.
+
+Each window records `avg_w`, `min_w`, `peak_w`, `duration_s` and `n_samples`.
+`peak_w` is there for the open question below: on a shared node a co-tenant's
+job inflates `avg_w` with no other symptom, and a peak far above the average is
+what exposes it. `analysis/summarize_runs.py` averages idle over distinct
+observations rather than over rows, since one pod's figure is copied onto all of
+its rows, and reports `n_idle_observations` beside the mean.
+
+Configurable with `--idle-seconds`, skippable with `--no-idle`, and skipped
+automatically under `--no-power` so a CPU smoke test still runs.
+
+**Still not measured on a GPU.** The code path has never executed against NVML.
+
 **Open question for the team:** is idle a property of the card, or of the card
 plus whatever else the node is doing? Nautilus nodes are shared, so a "idle"
 reading may include another tenant's work. That may mean idle has to be measured
-per node and per time, not once per card.
+per node and per time, not once per card. `peak_w` and `min_w` per window are
+recorded so this can be answered from the sweep data rather than assumed.
 
 ---
 
@@ -206,7 +240,9 @@ that a number cannot quietly reach the paper.
 
 **Before the sweep, because they change what gets recorded:**
 
-1. Add idle power sampling to `runner.py`? (Arav proposes yes.)
+1. ~~Add idle power sampling to `runner.py`?~~ Done 2026-08-23, see Gap 1.
+   What is left for the team is whether the cold, pre-model-load idle it
+   records is the quantity the paper should report.
 2. Is board-only measurement an accepted scope boundary, stated in methods?
 
 **Before Phase 7, because they determine which numbers we go and source:**
