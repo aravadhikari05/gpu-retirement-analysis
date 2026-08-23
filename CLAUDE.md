@@ -1032,28 +1032,6 @@ suggestions from this file's existing assignments, not fixed. Before starting
 any item, check `git log` and live Nautilus pod and PVC state, per the hard rule
 about stubs and teammates' in-progress work.
 
-**Where the project actually stands, 2026-08-23.** The measurement half is done:
-three workloads, three cards, five repetitions, every gate passed, energy scoped
-to the timed region, idle power recorded, provenance on every row. Nothing
-downstream is blocked on more GPU time.
-
-**The critical path is now item 8, embodied carbon, and it needs no cluster
-access at all.** Until a kg CO2e figure exists for the 2080 Ti and the A4000,
-there is no break-even number and items 9 and 10 cannot start. Everything else
-below is parallelisable.
-
-Three pieces of work that can run at the same time, by whoever picks them up:
-
-| Work | Needs | Blocks |
-|---|---|---|
-| 8, embodied carbon | Desk research only | 9, then 10 |
-| Adviser sign-off on the framing | A conversation | What the paper claims |
-| The 1080 Ti resnet counter gap | The 50 rows, already committed | Whether that row's energy is reportable |
-
-Two things anyone touching the data should read first: `analysis/fleet_subset.py`
-is the one definition of the analysable slice, and the same-model variance
-finding above bounds what any cross-model comparison is allowed to claim.
-
 ### 1. Phase 5, k8s storage: DONE (Veda, 2026-08-20, `2dc4e7e`)
 
 `k8s/benchmark-pod.yaml`, `k8s/results-pvc.yaml` and `k8s/STORAGE.md` cover every
@@ -1225,52 +1203,26 @@ A re-run is plausible rather than unlikely, since the framing is unconfirmed and
 same-model variance is barely sampled. Treat these rows as a real dataset that
 may need repeating, not as final.
 
-### 8. Phase 7, embodied carbon (blocks Phase 8)
+### The one sizing constant that is an estimate
 
-Every figure in Embodied carbon is an unsourced placeholder. Source per GPU from
-the ACT model, vendor PCF reports and die sizes, in the style
-`paper/methods-notes.md` used for bandwidth. Ranges, not point values.
+**LLM `inner_iters`: closed 2026-08-23.** Set to 8, chosen from the measured
+L40S runtime plus margin rather than from a 3090 measurement, since no 3090
+could be obtained. It remains the one sizing constant that is an estimate: if a
+3090 later shows slack, **do not retune it down**, because the headroom is the
+insurance and a change to `inner_iters` changes `config_id` and forces a re-run.
 
-### 9. Phase 8, carbon model
+Kept here rather than moved to `TODO.md` because it is a standing decision, not
+an open task. The 8 iterations were confirmed on hardware across three cards on
+2026-08-23.
 
-Build `analysis/carbon_model.py` (`break_even_jobs`, `break_even_hours_per_year`,
-`payback_curve`). Do not implement the core inequality without reading
-`docs/tasks/phase8-break-even-inputs.md`; it has six gaps. Use the units line in
-Break-even model exactly, since dropping the 3.6e6 conversion is wrong by 3.6
-million while still looking plausible.
+### 8 onward: Phase 7 and later
 
-### 10. Phases 9 to 10, sensitivity and plots
+**Moved to `TODO.md`.** Everything from Phase 7 (embodied carbon) onward is
+open work rather than history, along with the unclaimed side items that used to
+sit at the end of this list. `TODO.md` owns them, in dependency order, with what
+blocks what.
 
-`analysis/sensitivity.py` and `analysis/plots.py`. Not started.
-
-### Unclaimed side work, no ordering
-
-- **The CI workflow still lists `schema-idle-sizing` as a build trigger branch.**
-  The workflow comment says to remove it once the branch lands. It landed
-  2026-08-23. Note any change under `Dockerfile`, `benchmarks/` or
-  `measurement/` on `main` triggers a 22 minute build and moves `:latest`, which
-  `k8s/interactive.yaml` and `k8s/sample_job.yaml` both pull.
-- **`k8s/benchmark-pod.yaml` still pins `{{IMAGE}}` to a tag.** Container builds
-  says reference by digest. The fleet pass used
-  `sha256:9e62c0de6a56b995a1de66269cb1d26666f099390fb90c83e7aaca9f360877e4`
-  explicitly for this reason. Substitute a digest for any measured run.
-
-- **LLM `inner_iters`: closed 2026-08-23.** Set to 8, chosen from the measured
-  L40S runtime plus margin rather than from a 3090 measurement, since no 3090
-  could be obtained. It remains the one sizing constant that is an estimate: if a
-  3090 later shows slack, **do not retune it down**, because the headroom is the
-  insurance and a change to `inner_iters` changes `config_id` and forces a re-run.
-- **ruff config.** No `pyproject.toml` or `ruff.toml`, so `ruff check` enforces
-  only defaults, not the type-hint, docstring or naming rules in Coding
-  conventions. Adding one that actually checks them is unclaimed.
-- **Registry authority.** Decide GHCR (GitHub Actions, where the verified image
-  was pulled from) against `gitlab-registry.nrp-nautilus.io` (still named in
-  Cluster environment). This clone has no `gitlab` remote. Reconcile the two
-  notes once decided.
-- **Dockerfile comment.** `Dockerfile` line 4 still says the cu121 wheels "carry
-  sm_61". Measurement corrected that; the practical conclusion holds but the
-  comment is wrong. See Library version traps.
-- **Phase numbering.** `docs/phases.md` uses 1 to 10; a separate team plan
-  Prof. Jullig uses has 7 phases, and `matmul.py` cites a Phase 8 that neither
-  scheme places cleanly. If the team plan becomes canonical, add a mapping rather
-  than renaming task docs, to keep commit and PR links alive.
+They were removed from here rather than mirrored because two copies of a task
+list drift, and the stale one is always the one somebody reads. What stays above
+is the record of how items 1 through 7 were closed and what the closing
+measured, which is the part worth keeping in this file.

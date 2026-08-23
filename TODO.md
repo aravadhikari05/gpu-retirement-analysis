@@ -234,6 +234,13 @@ and the paper has to address it. Figures per card and per workload are in
   2026-08-23. The workflow comment says to remove it once it lands.
 - **`k8s/benchmark-pod.yaml` still pins `{{IMAGE}}` to a tag.** Reference images
   by digest for any measured run.
+- **Dockerfile comment.** `Dockerfile` line 4 still says the cu121 wheels "carry
+  sm_61". Measurement corrected that; the practical conclusion holds but the
+  comment is wrong. See Library version traps in `CLAUDE.md`.
+- **Phase numbering.** `docs/phases.md` uses 1 to 10; a separate team plan
+  Prof. Jullig uses has 7 phases, and `matmul.py` cites a Phase 8 that neither
+  scheme places cleanly. If the team plan becomes canonical, add a mapping rather
+  than renaming task docs, to keep commit and PR links alive.
 - **ruff config.** No `pyproject.toml` or `ruff.toml`, so `ruff check` runs on
   defaults and enforces none of the type hint, docstring or naming rules in
   Coding conventions.
