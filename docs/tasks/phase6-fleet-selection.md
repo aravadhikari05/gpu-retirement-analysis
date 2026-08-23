@@ -18,7 +18,7 @@ part. That is still a real retirement question, and arguably the one an academic
 cluster like NRP actually faces, but it is a different question and the paper
 has to name it as such rather than quietly substituting one for the other.
 
-**This needs Prof. Jullig's agreement before the sweep runs.** Collecting 5
+**This needs the prof's agreement before the sweep runs.** Collecting 5
 repetitions across 3 workloads and 4 cards is a substantial commitment to a
 framing, and the framing changed after the cards were checked.
 
@@ -142,7 +142,7 @@ study is what makes that column meaningful rather than merely present.
 
 ## Consequences for the to-do list
 
-- Fleet selection above must be confirmed with Prof. Jullig before Phase 6 runs.
+- Fleet selection above must be confirmed with the prof before Phase 6 runs.
 - Same-model variance becomes a prerequisite of Phase 6 interpretation, not a
   nice to have, and it is unblocked today.
 - Preflight is still outstanding on the 3090 and A4000. The 2080 Ti is done and

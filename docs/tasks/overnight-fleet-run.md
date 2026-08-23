@@ -113,7 +113,7 @@ models, power attached, energy scoped to the timed region.
 It is **not** Phase 6 as `docs/tasks/phase6-fleet-selection.md` scopes it. Three
 preconditions are unmet and every row inherits that:
 
-1. The fleet framing has not been confirmed with Prof. Jullig. The project was
+1. The fleet framing has not been confirmed with the prof. The project was
    framed around modern datacenter GPUs; those are unreachable, so the fleet is
    a consumer and workstation line.
 2. Same-model variance is unmeasured, so **no cross-model difference in these

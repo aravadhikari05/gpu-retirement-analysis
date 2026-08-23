@@ -62,7 +62,7 @@ here only because they change what later work is allowed to claim:
 
 ## Critical path
 
-### 1. Decide the replacement unit (blocks item 2)
+### 1. Replacement unit: DECIDED, the GPU (2026-08-23)
 
 **Gap 5 of `docs/tasks/phase8-break-even-inputs.md`.** Is the thing being
 replaced a GPU inside an existing node, or a whole node? Vendor product carbon
@@ -70,10 +70,10 @@ footprint reports are whole-system, so a GPU-only figure has to be worked
 backwards from them, which is a modelling assumption with its own error bars.
 
 This decision determines **which numbers Phase 7 goes and sources**, so making
-it afterwards means sourcing twice. It needs a person, not a computation.
+it afterwards means sourcing twice.
 
-**Recommendation: the GPU, not the node. Not yet confirmed by anyone, so treat
-this as a proposal to accept or reject, not a settled decision.**
+**Confirmed 2026-08-23: the unit is the GPU, not the node.** Phase 7 sources
+per-card embodied figures. Item 2 is unblocked.
 
 Three reasons, all grounded in what the project actually measured:
 
@@ -99,10 +99,12 @@ What accepting it costs, and what therefore has to be stated in methods:
 - Host energy is excluded on the operational side, which understates the slower
   card. Known direction, so state it.
 
-**This interacts with the framing conversation with Prof. Jullig below.** If the
-answer there is that NRP retires whole nodes rather than swapping cards, this
-recommendation flips and Phase 7 sources whole-system figures instead. Take both
-questions to that conversation at once rather than deciding this one alone.
+**One thing to carry into the framing conversation below.** This decision
+assumes NRP replaces cards inside existing chassis rather than retiring whole
+nodes. That assumption is the project's own, not something NRP has confirmed. If
+the framing conversation establishes that whole nodes are the real unit, this
+reopens and Phase 7 sources whole-system figures instead. Worth one sentence of
+confirmation there rather than a separate decision.
 
 Two related boundaries in the same Gap, which need stating rather than solving:
 a card retired here may be redeployed elsewhere rather than scrapped, in which
@@ -110,7 +112,7 @@ case its remaining operational carbon moves rather than disappears; and
 end-of-life and disposal carbon is absent from the model entirely, though it is
 usually small next to manufacturing.
 
-### 2. Phase 7: embodied carbon (blocks items 3 and 4)
+### 2. Phase 7: embodied carbon (unblocked, blocks items 3 and 4)
 
 Owner doc: `docs/phases.md` (weeks 5 to 6). Placeholder figures and the sources
 to work from are in `CLAUDE.md` under Embodied carbon and grid intensity.
@@ -152,7 +154,7 @@ Status of the six gaps as of 2026-08-23:
 | 2. Boundary is the GPU board only | Open. A statement to make in methods, not work. Excludes host CPU, so it understates the slower card |
 | 3. PUE absent | Open. Probably a swept parameter: the fleet spans many institutions |
 | 4. Snapshot against integral | Open. Grid intensity declines, so later savings are worth less |
-| 5. GPU against whole node | Open, and it is item 1 above |
+| 5. GPU against whole node | **Closed 2026-08-23**: the GPU. See item 1 |
 | 6. Real NRP utilisation | Open. Probably unavailable at user-level access. If so, ship a parameterised curve and say the reader supplies utilisation |
 
 ### 4. Phase 9: sensitivity
@@ -179,7 +181,7 @@ there as they are established, not only in task docs.
 
 ## Decisions that need a human, not a computation
 
-### Confirm the framing with Prof. Jullig
+### Confirm the framing with the prof
 
 **This gates what the paper can claim and costs no GPU time.** The project was
 framed around replacing an ageing card with a modern datacenter GPU. Those are
@@ -276,7 +278,7 @@ and the paper has to address it. Figures per card and per workload are in
   sm_61". Measurement corrected that; the practical conclusion holds but the
   comment is wrong. See Library version traps in `CLAUDE.md`.
 - **Phase numbering.** `docs/phases.md` uses 1 to 10; a separate team plan
-  Prof. Jullig uses has 7 phases, and `matmul.py` cites a Phase 8 that neither
+  the prof uses has 7 phases, and `matmul.py` cites a Phase 8 that neither
   scheme places cleanly. If the team plan becomes canonical, add a mapping rather
   than renaming task docs, to keep commit and PR links alive.
 - **ruff config.** No `pyproject.toml` or `ruff.toml`, so `ruff check` runs on

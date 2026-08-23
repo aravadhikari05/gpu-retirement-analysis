@@ -1,6 +1,6 @@
 # GPU Carbon Payback on NRP Nautilus
 
-Undergraduate research, UC Santa Cruz. Aidan Nguyen, adviser Prof. Jullig.
+Undergraduate research, UC Santa Cruz. Aidan Nguyen, adviser: the prof.
 Collaborators: Arav Adhikari, Veda Satvika.
 
 ## Where things are written down
@@ -112,7 +112,7 @@ what another document already owns.
   ageing card with a modern datacenter GPU; what is measurable is a consumer and
   workstation line from 2017 to 2021. Still a real retirement question, plausibly
   the one an academic cluster actually faces, but a different one.
-  **Confirm the framing with Prof. Jullig before spending the sweep on it.**
+  **Confirm the framing with the prof before spending the sweep on it.**
   Reasoning, evidence and the fallback for opportunistic runs are in
   `docs/tasks/phase6-fleet-selection.md`.
 - Plan the sweep against `allocatable_gpu_sum_swg`, not `allocatable_gpu_sum`.
@@ -860,19 +860,33 @@ Planned entry points in `analysis/carbon_model.py`: `break_even_jobs`,
 
 **Do not implement this inequality as written without reading
 `docs/tasks/phase8-break-even-inputs.md` first.** It walks the equation term by
-term and finds six gaps, one of which changes what the sweep must record:
-**idle power is not measured anywhere.** Every benchmark records energy inside
-the timed region, while the project premise is that a card which sits idle most
-of the time never pays back a replacement. A 1080 Ti was observed drawing
-55.03 W idle. Adding idle sampling before the sweep is a few lines; adding it
-after is a 12 to 15 GPU-hour re-run.
+term and finds six gaps. Two are now closed.
 
-The other five, summarised: the measurement boundary is the GPU board and
+**Gap 1, idle power: closed 2026-08-23.** It is measured per pod in two windows
+and recorded on every row. Note the fleet pass also contradicted the 55.03 W
+idle figure this file had quoted since 2026-08-18, and found idle draw to be
+roughly equal across all three cards, which weakens rather than supports the
+premise that a mostly-idle card gains from replacement. See the Measurement
+contract and Established results.
+
+**Gap 5, the replacement unit: decided 2026-08-23. The unit is the GPU, not the
+node.** Phase 7 sources per-card embodied figures. Grounds: the operational
+measurement is board-level, so a whole-system embodied figure would compare two
+different scopes across the inequality; the fleet is consumer and workstation
+cards that genuinely get swapped inside an existing chassis; and the framing
+question is about a card rather than a server. The cost of the choice, which
+methods has to state, is that vendor PCF reports are whole-system, so a GPU-only
+figure is worked backwards from them and carries that subtraction's error bars.
+Prefer the ACT model, which builds up from die size and is naturally GPU-shaped,
+and use PCF reports as a cross-check. The decision assumes NRP swaps cards
+rather than retiring whole nodes, which is our assumption and not confirmed by
+NRP; it reopens if the framing conversation says otherwise.
+
+The other four, summarised: the measurement boundary is the GPU board and
 excludes the host CPU feeding it; PUE is absent though we rejected CodeCarbon
 for hiding exactly that; the equation is a single-year snapshot while Phase 9
-wants declining grid intensity over time; the replacement unit may be a GPU or a
-whole node and vendor carbon reports are whole-system; and an NRP-specific
-recommendation needs real utilisation data the census does not contain.
+wants declining grid intensity over time; and an NRP-specific recommendation
+needs real utilisation data the census does not contain.
 
 Units, written down once, since dropping the conversion is wrong by 3.6 million
 while still looking plausible:
@@ -941,7 +955,7 @@ Phase numbers follow `docs/phases.md`.
 | 3 Workloads | **Done, all 3 measured through the runner with power** | All three emit `work_hash`, set TF32 explicitly, carry `config_id`, and return an enforced `WorkloadResult`. All three ran 5 repetitions on the 1080 Ti, 2080 Ti and A4000 on 2026-08-23. Sizing constants implemented and verified on hardware. The LLM now has `energy_j`, which was its last gap. |
 | 4 Power | **Working end to end on all 3 fleet cards, all 3 workloads** | Region scoping, idle power and the enforced record all verified on hardware 2026-08-23. Counter-against-integral agreement is per-card and per-workload: see the Measurement contract. Preflight done on 1080 Ti, 2080 Ti and A4000; still outstanding on the 3090, which is out of the fleet. |
 | 5 Storage | **Done** (Veda, 2026-08-20, `2dc4e7e`) | `k8s/benchmark-pod.yaml` is a real templated pod: both PVCs mounted, `NODE_NAME` / `IMAGE_REF` / `GIT_COMMIT` env, `HF_HOME=/models/hf`, `HF_HUB_OFFLINE=1`, `nodeSelector` on `nvidia.com/gpu.product`, args matching the runner CLI. `k8s/results-pvc.yaml` is the canonical results claim (live name `matmul-results`) and `k8s/STORAGE.md` documents the volume layout. |
-| 6 Sweep | **First fleet pass done, 2026-08-23** | 3 cards (1080 Ti, 2080 Ti, A4000) x 3 workloads x 5 repetitions, 50 analysable rows in `data/raw/runs/runs.jsonl`, selected by `analysis/fleet_subset.py` into `data/processed/fleet_runs.{jsonl,csv}`. No 3090, by decision. Every gate passed. Two things it is not: the framing is still unconfirmed with Prof. Jullig, and same-model variance is measured for exactly one card pair, so cross-model differences below about 6% are not interpretable. |
+| 6 Sweep | **First fleet pass done, 2026-08-23** | 3 cards (1080 Ti, 2080 Ti, A4000) x 3 workloads x 5 repetitions, 50 analysable rows in `data/raw/runs/runs.jsonl`, selected by `analysis/fleet_subset.py` into `data/processed/fleet_runs.{jsonl,csv}`. No 3090, by decision. Every gate passed. Two things it is not: the framing is still unconfirmed with the prof, and same-model variance is measured for exactly one card pair, so cross-model differences below about 6% are not interpretable. |
 | 7 Embodied carbon | **Not started, and now the critical path** | Every figure is an unsourced placeholder. Blocks Phase 8. The energy side is done, so this is the only thing between the project and a break-even number. |
 | 8 Carbon model | Scoped, not built | `analysis/summarize_runs.py` and `analysis/fleet_subset.py` prepare the input tables. `carbon_model.py` does not exist; its required inputs are reviewed in `docs/tasks/phase8-break-even-inputs.md`. |
 | 9 to 10 | Not started | `paper/methods-notes.md` already holds real measured content. |
@@ -995,7 +1009,7 @@ Still open:
   is a stated limitation, not a closed question.
 - **The 1080 Ti resnet counter-versus-integral gap is unexplained.** See the
   Measurement contract.
-- **The framing has not been confirmed with Prof. Jullig.** The fleet is a
+- **The framing has not been confirmed with the prof.** The fleet is a
   consumer and workstation line from 2017 to 2021, not the modern datacenter
   GPUs the project was framed around. This gates what the paper can claim and
   costs no GPU time.
