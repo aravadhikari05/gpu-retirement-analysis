@@ -1,0 +1,4 @@
+gpu_model,die_area_mm2,process_node,architecture,embodied_kg_low,embodied_kg_mid,embodied_kg_high,cpa_low_kg_cm2,cpa_high_kg_cm2,yield,packaging_kg,scope,source
+NVIDIA-GeForce-GTX-1080-Ti,471.0,16nm TSMC,Pascal GP102,5.5,10.9,16.3,1.0,3.0,0.875,0.15,gpu-die-only,"471 mm2 (PCWorld/Tom's Hardware, NVIDIA GP102)"
+NVIDIA-GeForce-RTX-2080-Ti,754.0,12nm TSMC,Turing TU102,8.8,17.4,26.0,1.0,3.0,0.875,0.15,gpu-die-only,754 mm2 (NVIDIA official; teardown 775 mm2)
+NVIDIA-RTX-A4000,392.0,8nm Samsung,Ampere GA104,4.6,9.1,13.6,1.0,3.0,0.875,0.15,gpu-die-only,"~392-396 mm2 (GA104, same die as RTX 3070)"

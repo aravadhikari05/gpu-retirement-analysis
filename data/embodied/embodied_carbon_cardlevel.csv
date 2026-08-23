@@ -1,0 +1,4 @@
+gpu_model,vram_gb,memory_kg,embodied_kg_low,embodied_kg_mid,embodied_kg_high,scope
+NVIDIA-GeForce-GTX-1080-Ti,11,0.72,6.2,11.6,17.0,die+gddr
+NVIDIA-GeForce-RTX-2080-Ti,11,0.72,9.5,18.1,26.7,die+gddr
+NVIDIA-RTX-A4000,16,1.04,5.7,10.1,14.6,die+gddr
