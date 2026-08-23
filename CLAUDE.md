@@ -15,6 +15,8 @@ what another document already owns.
   `phase3-workload-sizing.md` owns sweep sizing;
   `phase6-fleet-selection.md` owns which GPU models the sweep runs on and the
   same-model variance study;
+  `overnight-fleet-run.md` is a self-contained runbook for the first fleet pass,
+  written so an agent with none of the surrounding conversation can execute it;
   `phase8-break-even-inputs.md` owns what the carbon model needs and what is
   not being measured for it.
 - `paper/methods-notes.md` owns measured facts destined for the paper. Put them
@@ -33,6 +35,23 @@ what another document already owns.
 - No em dashes in any output, code comments included.
 - This repo is public. Never commit credentials, kubeconfigs, S3 keys, or tokens.
 - Preserve uncertainty. Ranges, not point values, for carbon estimates.
+- **Cluster hygiene outranks finishing the task.** In order: do no damage, do
+  not waste shared resources, then complete the work. An unfinished run costs a
+  night; a GPU held by a forgotten pod costs another team their work.
+  - Every pod you create, you delete. Before stopping for any reason, run
+    `kubectl -n cmpm118 get pods,jobs` and confirm nothing prefixed with your
+    name is left.
+  - **Never delete another person's resources.** `cmpm118` is shared outside
+    this project. Anything without an owner prefix is not yours, including pods
+    that have sat in `Error` for days.
+  - Every GPU job carries `activeDeadlineSeconds` and `ttlSecondsAfterFinished`.
+    The deadline is what releases the card when the client dies, the VPN drops
+    or an agent is killed.
+  - Ask the cluster before probing it. `k8s/nrp_availability.py` answers what is
+    free at zero cost. Launching a pod per GPU model to find out is a last
+    resort, not a habit.
+  - Never add a toleration for `nautilus.io/reservation=*`. Those taints fence
+    other institutions' hardware.
 - Shared repo. Read existing files before modifying them. Many files under
   benchmarks/, measurement/, and analysis/ are one-line stubs, not empty.
   A missing file or directory may mean a teammate has work in progress
@@ -917,6 +936,14 @@ question on hardware. What is left:
 - **Done 2026-08-23 for matmul and resnet** across 1080 Ti, 2080 Ti and 3090,
   plus the L4 matmul row. Remaining: **llm through the runner with power**, which
   is now the only workload with no `energy_j`.
+- **`docs/tasks/overnight-fleet-run.md` is the runbook for closing this**, and
+  for the first 5 repetition fleet pass behind it. It gates the fleet on a 15
+  minute, 1 repetition verification, because nothing on branch
+  `schema-idle-sizing` has executed on hardware: the enforced `WorkloadResult`,
+  both idle-power windows, the matmul and resnet sizing defaults and the LLM's 8
+  generations per timed region are all unverified. It also carries the repair
+  authority boundary: configuration failures may be fixed in place, a traceback
+  out of `benchmarks/` or `measurement/` stops the run.
 - Re-run matmul and resnet above the 30 s floor once the sizing constants below
   are implemented. Everything except three matmul rows is currently excluded.
 - **Set `IMAGE_REF` and `GIT_COMMIT` on every pod.** Both are empty on the L4
