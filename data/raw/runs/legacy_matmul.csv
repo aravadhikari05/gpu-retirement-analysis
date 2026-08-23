@@ -1,0 +1,2 @@
+run_utc,gpu_model,workload,runtime_s,energy_j,device,dtype,n,iters,total_flops,gflops_per_s
+2026-08-14T00:38:36+00:00,NVIDIA-GeForce-RTX-2080-Ti,matmul,8.0728,,cuda,fp32,8192,100,109951162777600,13619.9

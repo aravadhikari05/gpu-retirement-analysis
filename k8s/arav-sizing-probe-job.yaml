@@ -1,0 +1,115 @@
+# Sizing probe: matmul then resnet on one fast card, in one pod. Owner: Arav.
+#
+# TEMPLATE. Render with:
+#   sed -e 's/{{RUN_NAME}}/arav-probe-2080ti/' \
+#       -e 's/{{GPU_MODEL}}/NVIDIA-GeForce-RTX-2080-Ti/' \
+#       -e 's/{{CPU}}/8/' \
+#       k8s/arav-sizing-probe-job.yaml | kubectl apply -f -
+#
+# Pick the CPU count against the target node's free CPU, which
+# `python3 k8s/nrp_availability.py --model <product>` reports. Asking for more
+# CPU than any open node has free leaves the pod Pending forever. Keep it as
+# high as will fit: resnet's DataLoader does the 224x224 resize on CPU, and a
+# lower count confounds a starvation reading against the 1080 Ti run, which
+# used 8.
+#
+# Why one pod for two workloads: the 7.71 GB image pull dominates everything
+# else, which is the same reason docs/tasks/phase3-workload-sizing.md has the
+# sweep loop internally rather than launching a pod per point. Two sequential
+# runner invocations cost one pull and roughly 20 s of GPU.
+#
+# Why this probe exists. Sizing is set by the FASTEST card in the sweep, because
+# the work must be identical fleet-wide and the fastest card must still clear the
+# 30 s floor. Measured so far: matmul 44.56 s on an L4 (iters=500), resnet 19.19 s
+# on a GTX 1080 Ti (100 batches, already below the floor on the SLOWEST card).
+# Neither count can be set without knowing what the fastest reachable card does,
+# and estimating that from published TFLOPS is the error that predicted the L4 at
+# 14 s against an actual 32.87 s. Extrapolating along iters WITHIN one card is
+# linear and safe; extrapolating across cards is not.
+#
+# Both runs here are expected to land below the 30 s floor and be written with an
+# exclusion_reason. That is the point: they are sizing inputs, not measurements.
+# Never aggregate them.
+#
+# Second payoff: cross-card work_hash. matmul runs at the exact config the L4 row
+# used (n=8192, iters=500, fp32, seed 20260818) and resnet runs at its fixed
+# constants, so both hashes can be compared against data/raw/runs/runs.jsonl.
+# Both are config-kind hashes and should match exactly across architectures.
+#
+# Third payoff: dataloader starvation. resnet held a 1080 Ti at 82% of its power
+# limit. On a card several times faster the CPU-side Resize(224) may not keep up,
+# and the tell is runtime scaling sub-linearly with card speed while average power
+# sits low against the cap.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{RUN_NAME}}
+  namespace: cmpm118
+  labels:
+    app: gpu-retirement
+    gpu-retirement/role: sizing-probe
+spec:
+  backoffLimit: 0
+  # Cleans itself up an hour after finishing. Results live on the PVC, not in
+  # the pod, so losing the pod object loses nothing.
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: gpu-retirement
+        gpu-retirement/role: sizing-probe
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: bench
+        image: ghcr.io/aravadhikari05/gpu-retirement-analysis@sha256:ec4194abca45b10e1a054b60b2abaecc96ab55216b12c8f5c35e1042d4f03f0d
+        # The image ENTRYPOINT is measurement.runner, overridden here to run two
+        # invocations in one container.
+        command: ["sh", "-c"]
+        args:
+        - |
+          set -e
+          python3 -m measurement.runner --benchmark matmul --repeats 1 \
+            --set n=8192 --set iters=500 --set precision=fp32 --out-dir /results
+          python3 -m measurement.runner --benchmark resnet_train --repeats 1 \
+            --set precision=fp32 --out-dir /results
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        # runner.py writes these blank without erroring if unset. The one L4 row
+        # in data/raw/runs/ has both empty, which is why they are explicit here.
+        - name: IMAGE_REF
+          value: "ghcr.io/aravadhikari05/gpu-retirement-analysis@sha256:ec4194abca45b10e1a054b60b2abaecc96ab55216b12c8f5c35e1042d4f03f0d"
+        - name: GIT_COMMIT
+          value: "023110f53c68705866b83501147ca1b65e4115c4"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: 16Gi
+            cpu: "{{CPU}}"
+          requests:
+            nvidia.com/gpu: 1
+            memory: 16Gi
+            cpu: "{{CPU}}"
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        # resnet_train uses DataLoader(num_workers=2) and the k8s default shm is
+        # 64 MB, which 224x224 batches exceed. Without this the worker is killed
+        # mid-run. num_workers is a module constant, not settable via --set.
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: results
+        persistentVolumeClaim:
+          claimName: matmul-results
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 2Gi
+      nodeSelector:
+        nvidia.com/gpu.product: {{GPU_MODEL}}
