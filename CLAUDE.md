@@ -13,6 +13,8 @@ what another document already owns.
 - `docs/phases.md` is the authoritative phase numbering, 1 through 10.
 - `docs/tasks/*.md` own per-workload specs and per-phase scoping.
   `phase3-workload-sizing.md` owns sweep sizing;
+  `phase6-fleet-selection.md` owns which GPU models the sweep runs on and the
+  same-model variance study;
   `phase8-break-even-inputs.md` owns what the carbon model needs and what is
   not being measured for it.
 - `paper/methods-notes.md` owns measured facts destined for the paper. Put them
@@ -72,6 +74,22 @@ what another document already owns.
   `nautilus-it-gpu03.fullerton.edu`, the node that produced both L4 measurements
   this project owns. **Do not add tolerations for another institution's
   reservation taint.** Ask NRP or CSUF if L4 access is needed.
+- **The sweep targets the 1080 Ti, 2080 Ti, 3090 and A4000.** Decided
+  2026-08-23 on reachability grounds, not scientific ones: the L4, L40S and 4090
+  all report zero GPUs free on nodes this namespace can schedule. Three separate
+  mechanisms are involved and they have different remedies. Namespace quota bans
+  A100, H100, H200 and GH200 outright (`requests.nvidia.com/a100: 0/0` and the
+  same for the rest). Reservation taints fence the L4 behind CSU Fullerton.
+  Ordinary contention accounts for the 4090 and L40S, so those may be usable
+  opportunistically but cannot be planned around.
+
+  This changes what the paper claims. The project was framed as replacing an
+  ageing card with a modern datacenter GPU; what is measurable is a consumer and
+  workstation line from 2017 to 2021. Still a real retirement question, plausibly
+  the one an academic cluster actually faces, but a different one.
+  **Confirm the framing with Prof. Jullig before spending the sweep on it.**
+  Reasoning, evidence and the fallback for opportunistic runs are in
+  `docs/tasks/phase6-fleet-selection.md`.
 - Plan the sweep against `allocatable_gpu_sum_swg`, not `allocatable_gpu_sum`.
   The new column (Aidan, `32a1ee5`, 2026-08-17) sums allocatable GPUs on openly
   schedulable nodes only; the old one counts reserved and tainted nodes too. The
@@ -392,6 +410,15 @@ Doing exactly that predicted the L4 at 14 s against an actual 32.87 s, because
 gpt2 and gpt2-xl sit in different regimes (compute bound against bandwidth
 bound).
 
+**Nothing cross-model can be interpreted until same-model variance is known.**
+Every energy figure the project holds is n=1 on one physical card per model. If
+two 1080 Tis differ from each other by 15%, the measured 1.40x between a 1080 Ti
+and a 2080 Ti means something very different than if they differ by 1%. This has
+been an open question in this file since 2026-08-11 and no workload has tested
+it. It is now a prerequisite for reading Phase 6 output, not a nice to have, and
+it is unblocked: the 1080 Ti has more reachable free capacity than any other
+model. Design in `docs/tasks/phase6-fleet-selection.md`.
+
 **The fixed-work premise holds across four architectures.** Measured
 2026-08-23: matmul's `work_hash` is byte-identical on the GTX 1080 Ti (sm 6.1),
 RTX 2080 Ti (sm 7.5), RTX 3090 (sm 8.6) and L4 (sm 8.9); resnet's is identical
@@ -697,7 +724,7 @@ Phase numbers follow `docs/phases.md`.
 | 3 Workloads | Written, all 3 have run on a GPU | All three emit `work_hash` and set TF32 explicitly and `config_id`. matmul measured on 4 cards and resnet on 3 (2026-08-23, `data/raw/runs/`), `work_hash` identical across all of them. LLM measured only outside the runner, `data/raw/llm_smoke/`, so it still has no `energy_j`. Sizing constants for matmul and resnet are decided but not implemented. |
 | 4 Power | Working end to end on 4 GPU models | Region scoping verified on hardware across 1080 Ti, 2080 Ti, 3090 and L4; 7 rows in `data/raw/runs/`. Counter-against-integral agreement is per-card and ranges from -0.001% to +6.94%; the 3090 shows the cached-reading signature. Preflight has run on the 1080 Ti only. Never attached to the llm workload. |
 | 5 Storage | **Done** (Veda, 2026-08-20, `2dc4e7e`) | `k8s/benchmark-pod.yaml` is a real templated pod: both PVCs mounted, `NODE_NAME` / `IMAGE_REF` / `GIT_COMMIT` env, `HF_HOME=/models/hf`, `HF_HUB_OFFLINE=1`, `nodeSelector` on `nvidia.com/gpu.product`, args matching the runner CLI. `k8s/results-pvc.yaml` is the canonical results claim (live name `matmul-results`) and `k8s/STORAGE.md` documents the volume layout. |
-| 6 Sweep | Not started | Blockers: idle power (`docs/tasks/phase8-break-even-inputs.md`), the record schema (Output contract), implementing the measured sizing constants, and preflight on 2080 Ti and 3090. Fleet choice is now evidence-based: 1080 Ti, 2080 Ti, 3090 and A4000 are reachable and free; L4, L40S and 4090 are not. |
+| 6 Sweep | Not started, fleet decided | Fleet is 1080 Ti, 2080 Ti, 3090 and A4000, on reachability grounds; see `docs/tasks/phase6-fleet-selection.md`, and the framing change it implies needs adviser sign-off. Blockers: idle power, the record schema, the sizing constants, preflight on 3090 and A4000, and same-model variance before any result can be read. |
 | 7 Embodied carbon | Not started | Every figure is an unsourced placeholder. Blocks Phase 8. |
 | 8 Carbon model | Scoped, not built | `analysis/summarize_runs.py` prepares the input table. `carbon_model.py` does not exist; its required inputs are reviewed in `docs/tasks/phase8-break-even-inputs.md`. |
 | 9 to 10 | Not started | `paper/methods-notes.md` already holds real measured content. |
@@ -839,19 +866,36 @@ decision; interim value is 1.
 
 - **Done 2026-08-23 for matmul (4 cards) and resnet (3 cards).** Both hashes are
   identical across architectures. See Established results.
-- Still open: LLM `work_hash` at the full 960-token length across two cards, and
-  agreement between two physical cards of the same model, which no workload has
-  tested. The 1080 Ti is the card to do the same-model check on: 22 free and
-  reachable, more than any other.
+- **Same-model variance is now a prerequisite of Phase 6, not an optional
+  check.** No workload has ever compared two physical cards of the same model,
+  and every energy figure is n=1, so no cross-model difference can be read yet.
+  Do it on the 1080 Ti, which has the most reachable free capacity: matmul, above
+  the floor, 5 repetitions on each of at least 5 distinct `gpu_uuid` values
+  across as many nodes as possible, reporting within-card and between-card spread
+  separately. Design in `docs/tasks/phase6-fleet-selection.md`. Unblocked today.
+- Still open: LLM `work_hash` at the full 960-token length across two cards.
 
 ### 6. Preflight each GPU model before its first measured run (now urgent)
 
 `measurement/preflight.py` is per-card and has already falsified two documented
-assumptions. It has still only ever run on the 1080 Ti, and two cards have since
-produced suspicious power data without it: the 2080 Ti reads 7% apart on counter
-against integral, and the 3090 repeats power values in a way that matches the
-cached-reading failure. **Run it on 2080 Ti, 3090 and A4000**, the cards actually
-reachable, before their energy numbers are used for anything.
+assumptions.
+
+- 1080 Ti: done 2026-08-18.
+- **2080 Ti: done 2026-08-23, and it confirmed the problem rather than clearing
+  it.** Over a 60 s window the integral read 17866.658 J against a counter of
+  16816.193 J, +6.25%, with 0.001 W granularity and 303 distinct values in 321
+  samples. Third independent confirmation of the same per-card bias after matmul
+  at +6.94% and resnet at +6.57%, and it rules out both coarse quantisation and
+  cached readings as the cause. Which of the two figures to trust on Turing is an
+  open question the paper has to address.
+- **3090 and A4000: still outstanding.** The 3090 shows the cached-reading
+  signature in its benchmark traces and its preflight has been queued behind
+  cluster contention. Neither card's energy numbers should be used until this
+  runs.
+
+`k8s/arav-preflight-job.yaml` now samples for 60 s rather than 20, because
+comparing the integral against the counter over a window below the 30 s floor
+measures the floor rather than the card.
 
 ### 6b. Implement the measured sizing constants (blocks a clean sweep)
 
@@ -861,7 +905,10 @@ Until then every resnet run is below the 30 s floor and excluded.
 
 ### 7. Phase 6, the sweep
 
-Blocked on 2, 3 and 4; item 1 is done. 5 repetitions per model. Add a warmup-length axis to
+Blocked on 2, 3, 4, 6 and 6b; item 1 is done. Fleet is the 1080 Ti, 2080 Ti,
+3090 and A4000, decided on reachability, and the framing change that implies
+needs Prof. Jullig's agreement first. Same-model variance (item 5) has to land
+before the output can be interpreted. 5 repetitions per model. Add a warmup-length axis to
 the sizing sweep rather than cutting warmup on an assumption; see Workload sizing.
 
 ### 8. Phase 7, embodied carbon (blocks Phase 8)
