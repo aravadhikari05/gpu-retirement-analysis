@@ -64,6 +64,23 @@ PRECISION_NAMES = ("fp32", "tf32", "fp16", "bf16")
 # the LLM's guarantee. This field is what forbids that reading.
 WORK_HASH_KINDS = ("output", "config")
 
+# Field names the dataclass owns. `extra` may not contain any of them, because a
+# shadowed field would make the row disagree with itself. work_hash_covers is
+# listed even though it has a default: it is the prose expansion of
+# work_hash_kind and belongs to the same concept.
+REQUIRED_FIELDS = (
+    "workload",
+    "config_id",
+    "work_hash",
+    "work_hash_kind",
+    "work_hash_covers",
+    "precision",
+    "allow_tf32_matmul",
+    "allow_tf32_cudnn",
+    "inner_iters",
+    "runtime_seconds",
+)
+
 
 @dataclasses.dataclass
 class WorkloadResult:
@@ -163,18 +180,7 @@ class WorkloadResult:
     @staticmethod
     def _required_names() -> tuple[str, ...]:
         """Field names owned by the dataclass rather than by `extra`."""
-        return (
-            "workload",
-            "config_id",
-            "work_hash",
-            "work_hash_kind",
-            "work_hash_covers",
-            "precision",
-            "allow_tf32_matmul",
-            "allow_tf32_cudnn",
-            "inner_iters",
-            "runtime_seconds",
-        )
+        return REQUIRED_FIELDS
 
     def to_row(self) -> dict[str, Any]:
         """Flattens to the dict measurement/runner.py writes as one JSONL line.
@@ -188,3 +194,21 @@ class WorkloadResult:
         row = dict(self.extra)
         row.update({name: getattr(self, name) for name in self._required_names()})
         return row
+
+
+def extra_fields(record: dict[str, Any]) -> dict[str, Any]:
+    """Drops the keys the required set owns, so a metadata dict can be `extra`.
+
+    All three workloads build a precision or provenance dict that overlaps the
+    required set, and passing it straight in raises the shadowing error. Filtering
+    here rather than in each workload means a field promoted into the required set
+    later does not have to be hand-removed from three call sites.
+
+    Args:
+      record: Any metadata mapping, for example the read-back dict returned by
+        benchmarks._precision.set_precision.
+
+    Returns:
+      A new dict with every REQUIRED_FIELDS key removed.
+    """
+    return {k: v for k, v in record.items() if k not in REQUIRED_FIELDS}

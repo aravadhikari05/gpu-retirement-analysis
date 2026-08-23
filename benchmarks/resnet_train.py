@@ -43,6 +43,7 @@ from torchvision import transforms
 
 from benchmarks._context import RunContext, sync_device
 from benchmarks._precision import set_precision
+from benchmarks._result import WorkloadResult, extra_fields
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ def run(
     device: str = "cuda:0",
     precision: str = "fp32",
     ctx: RunContext | None = None,
-) -> dict:
+) -> WorkloadResult:
     """Runs the fixed-work ResNet-50 training benchmark.
 
     Args:
@@ -117,8 +118,8 @@ def run(
         for a standalone CLI run.
 
     Returns:
-      dict with runtime_seconds, work_hash, the loss sequence and the metadata
-      needed to prove two runs did the same work.
+      A WorkloadResult. The required fields are enforced by its constructor; the
+      loss sequence and the ResNet-specific metadata ride in `extra`.
     """
     torch_device = torch.device(device)
     # A monitor-less context for standalone CLI runs; the runner passes its own.
@@ -186,19 +187,10 @@ def run(
     )
     work_hash = hasher.hexdigest()
 
-    return {
-        "workload": "resnet_train",
-        # config_id states what was asked for; work_hash proves it happened.
-        # Format follows benchmarks/llm_inference.py so the three workloads are
-        # groupable by the same column in analysis.
-        "config_id": f"resnet50|cifar10|{precision}|b{BATCH_SIZE}|n{NUM_BATCHES}|s{SEED}",
-        "runtime_seconds": runtime_seconds,
-        "work_hash": work_hash,
-        "work_hash_covers": "seed, dataset indices and workload shape, not trained weights",
-        # The loop inside the timed region. Energy per batch is
-        # energy_j / inner_iters. Distinct from the runner's --repeats, which is
-        # the outer loop for statistical spread.
-        "inner_iters": NUM_BATCHES,
+    # Everything the required set does not already own. precision and both TF32
+    # read-backs are lifted out of precision_record into the constructor, since
+    # extra may not shadow a required field.
+    extra = {
         "batches_completed": NUM_BATCHES,
         "warmup_batches": NUM_WARMUP_BATCHES,
         "batch_size": BATCH_SIZE,
@@ -211,8 +203,34 @@ def run(
             if device.startswith("cuda") and torch.cuda.is_available()
             else ""
         ),
-        **precision_record,
+        **extra_fields(precision_record),
     }
+
+    return WorkloadResult(
+        workload="resnet_train",
+        # config_id states what was asked for; work_hash proves it happened.
+        # Format follows benchmarks/llm_inference.py so the three workloads are
+        # groupable by the same column in analysis.
+        config_id=f"resnet50|cifar10|{precision}|b{BATCH_SIZE}|n{NUM_BATCHES}|s{SEED}",
+        work_hash=work_hash,
+        # Config kind, not output kind: the hash covers the seed, the dataset
+        # indices and the workload shape, never the trained weights. See the
+        # module docstring for why hashing weights would fail for reasons that
+        # have nothing to do with whether the same work was done.
+        work_hash_kind="config",
+        work_hash_covers=(
+            "seed, dataset indices and workload shape, not trained weights"
+        ),
+        precision=precision_record["precision"],
+        allow_tf32_matmul=precision_record["allow_tf32_matmul"],
+        allow_tf32_cudnn=precision_record["allow_tf32_cudnn"],
+        # The loop inside the timed region. Energy per batch is
+        # energy_j / inner_iters. Distinct from the runner's --repeats, which is
+        # the outer loop for statistical spread.
+        inner_iters=NUM_BATCHES,
+        runtime_seconds=runtime_seconds,
+        extra=extra,
+    )
 
 
 if __name__ == "__main__":
@@ -223,7 +241,9 @@ if __name__ == "__main__":
     parser.add_argument("--precision", default="fp32")
     args = parser.parse_args()
 
-    result = run(data_dir=args.data_dir, device=args.device, precision=args.precision)
+    result = run(
+        data_dir=args.data_dir, device=args.device, precision=args.precision
+    ).to_row()
     logger.info(
         "runtime=%.4fs final_loss=%.4f work_hash=%s",
         result["runtime_seconds"],

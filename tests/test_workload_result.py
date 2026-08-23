@@ -10,7 +10,13 @@ Everything here is validation logic. No benchmark, no NVML, no GPU.
 
 import unittest
 
-from benchmarks._result import PRECISION_NAMES, WORK_HASH_KINDS, WorkloadResult
+from benchmarks._result import (
+    PRECISION_NAMES,
+    REQUIRED_FIELDS,
+    WORK_HASH_KINDS,
+    WorkloadResult,
+    extra_fields,
+)
 
 
 def _valid(**overrides) -> dict:
@@ -95,6 +101,34 @@ class WorkloadResultValidation(unittest.TestCase):
     def test_extra_must_be_a_dict(self):
         with self.assertRaises(ValueError):
             WorkloadResult(**_valid(extra=[("n", 8192)]))
+
+
+class ExtraFields(unittest.TestCase):
+    def test_required_keys_are_dropped(self):
+        # The shape benchmarks/_precision.set_precision actually returns.
+        precision_record = {
+            "precision": "fp32",
+            "device_requested": "cuda:0",
+            "allow_tf32_matmul": False,
+            "allow_tf32_cudnn": False,
+            "torch_version": "2.5.1+cu121",
+        }
+        extra = extra_fields(precision_record)
+        self.assertEqual(
+            extra, {"device_requested": "cuda:0", "torch_version": "2.5.1+cu121"}
+        )
+
+    def test_output_is_accepted_as_extra(self):
+        # The point of the helper: the filtered dict must not trip the
+        # shadowing check.
+        record = {name: "x" for name in REQUIRED_FIELDS}
+        record["loss_sequence"] = [1.0, 0.9]
+        WorkloadResult(**_valid(extra=extra_fields(record)))
+
+    def test_input_is_not_mutated(self):
+        record = {"precision": "fp32", "n": 8192}
+        extra_fields(record)
+        self.assertIn("precision", record)
 
 
 class WorkloadResultRow(unittest.TestCase):

@@ -36,7 +36,7 @@ import torch
 
 from benchmarks._context import RunContext, sync_device
 from benchmarks._precision import set_precision
-from benchmarks._result import WorkloadResult
+from benchmarks._result import WorkloadResult, extra_fields
 
 logger = logging.getLogger(__name__)
 
@@ -166,8 +166,7 @@ def run(
         "total_flops": total_flops,
         "gpu_model_torch": _detect_gpu_model(device, gpu_model or None),
         "dtype": str(dtype),
-        "device_requested": precision_record["device_requested"],
-        "torch_version": precision_record["torch_version"],
+        **extra_fields(precision_record),
     }
 
     return WorkloadResult(
