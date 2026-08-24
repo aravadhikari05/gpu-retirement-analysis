@@ -1201,6 +1201,16 @@ Units, written down once, since dropping the conversion is wrong by 3.6 million
 while still looking plausible:
 `carbon_saved_kg = (delta_energy_j * jobs / 3.6e6) * grid_intensity`.
 
+**`jobs` here means inner iterations, not repetitions**, and the two differ by
+`inner_iters`: 2000 on matmul, 1000 on resnet, 8 on llm. This is the same
+`repeat_index` against `inner_iters` split the Output contract already warns
+about, arriving on the output side. Made explicit 2026-08-23: `CardEnergy`
+carries `inner_iters`, `BreakEven` carries `jobs_per_repetition` and a
+`repetitions` property, and the CLI prints both counts with the unit named.
+`tests/test_carbon_model.py::JobUnit` pins it. A bare job count quoted as a
+repetition count is wrong by up to 2000x while still looking plausible, which
+is the same failure shape as dropping the 3.6e6.
+
 ### Both sides of the inequality now have numbers, and payback is fast
 
 **Computed 2026-08-23, and this is an illustration, not the Phase 8 result.** It

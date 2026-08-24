@@ -45,6 +45,14 @@ The inequality as originally written has no time in it:
 
     embodied_new < (energy_per_job_old - energy_per_job_new) * jobs * grid
 
+**A job is one inner iteration, not one benchmark repetition.** `inner_iters` is
+the workload's own loop inside the timed region, which exists to clear the 30 s
+floor: 2000 for matmul, 1000 batches for resnet, 8 generations for llm. So a
+matmul job count is 2000x its repetition count, and reading one as the other is
+wrong by that factor while still looking plausible. `BreakEven.repetitions`
+converts, and every printed job count is accompanied by it. The distinction is
+the `repeat_index` against `inner_iters` split in CLAUDE.md's Output contract.
+
 Jobs are a count. Idle draw is a rate, watts against hours, so it has nowhere to
 go in that expression. Passing `horizon_years=None` reproduces the original form
 exactly and **drops the idle term**, with a note saying so. Including idle needs
@@ -261,6 +269,10 @@ class CardEnergy:
       benchmark: Workload name.
       config_id: Pins the workload sizing. Two cards are comparable only when
         this and work_hash match, which is enforced upstream.
+      inner_iters: The workload's own loop count inside the timed region, and
+        therefore how many jobs one repetition contains. 2000 for matmul, 1000
+        batches for resnet, 8 generations for llm. Carried so the job unit can
+        be named wherever a job count is reported.
       energy_j_per_job: Energy for one inner_iter, the job unit.
       runtime_s_per_job: Wall clock for one inner_iter.
       idle_w: Idle draw with a live CUDA context, the NRP case of a pod holding
@@ -274,6 +286,7 @@ class CardEnergy:
     gpu_model: str
     benchmark: str
     config_id: str
+    inner_iters: int
     energy_j_per_job: float
     runtime_s_per_job: float
     idle_w: float
@@ -288,7 +301,10 @@ class BreakEven:
 
     Attributes:
       jobs: Total jobs before replacement pays back its embodied carbon, or None
-        when it never does.
+        when it never does. **A job is one inner iteration, not one benchmark
+        repetition.** See `jobs_per_repetition` to convert.
+      jobs_per_repetition: The workload's `inner_iters`. Divide `jobs` by this
+        for a repetition count, which is the unit a person actually ran.
       years_at_utilisation: Years to reach that job count at the utilisation
         asked for, or None.
       active_hours_per_year: Hours of active work per year this assumes.
@@ -300,6 +316,7 @@ class BreakEven:
     """
 
     jobs: float | None
+    jobs_per_repetition: int
     years_at_utilisation: float | None
     active_hours_per_year: float | None
     provisional: bool
@@ -310,6 +327,19 @@ class BreakEven:
     def pays_back(self) -> bool:
         """True when replacement pays back at all within the terms given."""
         return self.jobs is not None
+
+    @property
+    def repetitions(self) -> float | None:
+        """`jobs` expressed in benchmark repetitions, the unit a person ran.
+
+        A job is one inner iteration, so the two differ by `inner_iters`: a
+        factor of 2000 on matmul and 8 on llm. Reporting a job count as though
+        it were a repetition count is the misreading this property exists to
+        prevent.
+        """
+        if self.jobs is None:
+            return None
+        return self.jobs / self.jobs_per_repetition
 
 
 def load_card_energy(path: str = DEFAULT_ENERGY_BY_GPU) -> list[CardEnergy]:
@@ -351,6 +381,7 @@ def load_card_energy(path: str = DEFAULT_ENERGY_BY_GPU) -> list[CardEnergy]:
                     gpu_model=row.get("gpu_model", ""),
                     benchmark=row.get("benchmark", ""),
                     config_id=row.get("config_id", ""),
+                    inner_iters=int(inner),
                     energy_j_per_job=energy,
                     runtime_s_per_job=runtime / inner,
                     idle_w=_as_float(row.get("idle_post_context_avg_w_mean")) or 0.0,
@@ -658,6 +689,7 @@ def break_even_jobs(
         jobs = embodied_kg * J_PER_KWH / (delta * grid.kg_co2_per_kwh)
         return BreakEven(
             jobs=jobs,
+            jobs_per_repetition=old.inner_iters,
             years_at_utilisation=None,
             active_hours_per_year=None,
             provisional=provisional,
@@ -706,6 +738,7 @@ def break_even_jobs(
             notes.append("repaid by the idle differential alone, before any jobs")
             return BreakEven(
                 jobs=0.0,
+                jobs_per_repetition=old.inner_iters,
                 years_at_utilisation=float(horizon_years),
                 active_hours_per_year=0.0,
                 provisional=provisional,
@@ -734,6 +767,7 @@ def break_even_jobs(
 
     return BreakEven(
         jobs=jobs,
+        jobs_per_repetition=old.inner_iters,
         years_at_utilisation=float(horizon_years),
         active_hours_per_year=active_hours,
         provisional=provisional,
@@ -759,6 +793,7 @@ def _never(
         )
     return BreakEven(
         jobs=None,
+        jobs_per_repetition=old.inner_iters,
         years_at_utilisation=float(horizon_years) if horizon_years else None,
         active_hours_per_year=None,
         provisional=provisional,
@@ -867,6 +902,7 @@ def payback_curve(
         )
         answer = BreakEven(
             jobs=None,
+            jobs_per_repetition=old.inner_iters,
             years_at_utilisation=None,
             active_hours_per_year=active_hours,
             provisional=longest.provisional,
@@ -890,6 +926,7 @@ def payback_curve(
             if candidate.jobs is not None and candidate.jobs <= jobs_per_year * years:
                 answer = BreakEven(
                     jobs=candidate.jobs,
+                    jobs_per_repetition=old.inner_iters,
                     years_at_utilisation=float(years),
                     active_hours_per_year=active_hours,
                     provisional=candidate.provisional,
@@ -1067,6 +1104,7 @@ def main() -> None:
         tag = "PROVISIONAL" if low_answer.provisional else "sourced"
         label = f"{old.benchmark}: {old.gpu_model} -> {new.gpu_model}"
         print(f"[{tag}] {label}")
+        print(f"    1 job = 1 inner iteration, {old.inner_iters:,} per repetition")
         for end, answer in answers:
             prefix = f"    {end + ' embodied:':<16}" if is_range else "    "
             if answer.jobs is None:
@@ -1077,7 +1115,10 @@ def main() -> None:
                     if answer.active_hours_per_year is not None
                     else ""
                 )
-                print(f"{prefix}{answer.jobs:,.0f} jobs{hours}")
+                reps = answer.repetitions
+                print(
+                    f"{prefix}{answer.jobs:,.0f} jobs = {reps:,.0f} repetitions{hours}"
+                )
         if not low_answer.interpretable:
             print("    NOT INTERPRETABLE")
         for note in low_answer.notes:

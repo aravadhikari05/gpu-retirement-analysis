@@ -249,12 +249,18 @@ every line prints `[PROVISIONAL]`. That flag is the gate on quoting any number
 from this model, so **do not remove it until grid intensity is sourced**.
 
 **Cross-checked against the independent hand calculation, and they agree
-exactly.** For matmul 1080 Ti to A4000 at CAISO with the low embodied bound, the
-module reports 5,816,743 jobs against 2,908 repetitions computed by hand. The
-ratio is 2000.2, which is `inner_iters` for matmul. Note what that means:
-**a "job" in `carbon_model.py` is one inner iteration, not one repetition.**
-Easy to misread by a factor of 2000, and the Output contract in `CLAUDE.md`
-warns about exactly this conflation.
+exactly.** For matmul 1080 Ti to A4000 at CAISO with the low embodied bound in
+`--snapshot` mode, the module reports 5,816,743 jobs and 2,908 repetitions,
+against 2,908 repetitions computed by hand.
+
+**The job unit is now explicit, fixed 2026-08-23.** A job is one inner
+iteration, not one repetition, and the two differ by `inner_iters`: 2000 on
+matmul, 1000 on resnet, 8 on llm. That was a factor-of-2000 misreading waiting
+to happen. `CardEnergy` now carries `inner_iters`, `BreakEven` carries
+`jobs_per_repetition` with a `repetitions` property, and every printed line
+names the unit and gives both counts. `tests/test_carbon_model.py::JobUnit`
+pins the conversion on both the snapshot and horizon paths and through
+`payback_curve`.
 
 Two design decisions worth knowing before reading the output:
 

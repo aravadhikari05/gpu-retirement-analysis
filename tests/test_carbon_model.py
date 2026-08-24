@@ -40,6 +40,7 @@ MATMUL_1080TI = CardEnergy(
     gpu_model="NVIDIA GeForce GTX 1080 Ti",
     benchmark="matmul",
     config_id="matmul|n8192|fp32|i2000|s20260818",
+    inner_iters=2000,
     energy_j_per_job=31.9628456537624,
     runtime_s_per_job=285.20541353583604 / 2000,
     idle_w=25.430789414414402,
@@ -51,6 +52,7 @@ MATMUL_A4000 = CardEnergy(
     gpu_model="NVIDIA RTX A4000",
     benchmark="matmul",
     config_id="matmul|n8192|fp32|i2000|s20260818",
+    inner_iters=2000,
     energy_j_per_job=14.324108542632437,
     runtime_s_per_job=205.2085557779763 / 2000,
     idle_w=25.0573023255814,
@@ -107,6 +109,71 @@ class Units(unittest.TestCase):
         expected_jobs = 100.0 * J_PER_KWH / (delta * 0.200)
         answer = break_even_jobs(PLACEHOLDER, MATMUL_1080TI, MATMUL_A4000, CAISO)
         self.assertAlmostEqual(answer.jobs, expected_jobs, places=3)
+
+
+class JobUnit(unittest.TestCase):
+    """A job is one inner iteration, never one repetition.
+
+    matmul runs inner_iters=2000, so the two counts differ by 2000x. Reporting
+    one as the other is wrong by that factor while still looking plausible,
+    which is exactly the class of error the Output contract's repeat_index
+    against inner_iters split exists to prevent. These pin the conversion so a
+    change to it fails here rather than in a paper table.
+    """
+
+    def test_repetitions_divides_jobs_by_inner_iters(self):
+        answer = break_even_jobs(
+            EmbodiedEstimate("NVIDIA RTX A4000", 10.0, 10.0, "die+gddr", True),
+            MATMUL_1080TI,
+            MATMUL_A4000,
+            preset("CAISO"),
+        )
+        self.assertIsNotNone(answer.jobs)
+        self.assertEqual(answer.jobs_per_repetition, 2000)
+        self.assertAlmostEqual(answer.repetitions, answer.jobs / 2000)
+
+    def test_repetition_count_is_far_smaller_than_job_count(self):
+        """The whole point: the two are not interchangeable."""
+        answer = break_even_jobs(
+            EmbodiedEstimate("NVIDIA RTX A4000", 10.0, 10.0, "die+gddr", True),
+            MATMUL_1080TI,
+            MATMUL_A4000,
+            preset("CAISO"),
+        )
+        self.assertGreater(answer.jobs / answer.repetitions, 1000)
+
+    def test_repetitions_is_none_when_it_never_pays_back(self):
+        answer = break_even_jobs(
+            EmbodiedEstimate("NVIDIA RTX A4000", 10.0, 10.0, "die+gddr", True),
+            MATMUL_A4000,
+            MATMUL_1080TI,
+            preset("CAISO"),
+        )
+        self.assertIsNone(answer.jobs)
+        self.assertIsNone(answer.repetitions)
+
+    def test_job_unit_survives_the_horizon_path(self):
+        """Both branches of break_even_jobs must carry the unit."""
+        answer = break_even_jobs(
+            EmbodiedEstimate("NVIDIA RTX A4000", 10.0, 10.0, "die+gddr", True),
+            MATMUL_1080TI,
+            MATMUL_A4000,
+            preset("CAISO"),
+            horizon_years=6,
+        )
+        self.assertEqual(answer.jobs_per_repetition, 2000)
+        self.assertAlmostEqual(answer.repetitions, answer.jobs / 2000)
+
+    def test_payback_curve_carries_the_unit(self):
+        curve = payback_curve(
+            EmbodiedEstimate("NVIDIA RTX A4000", 10.0, 10.0, "die+gddr", True),
+            MATMUL_1080TI,
+            MATMUL_A4000,
+            preset("CAISO"),
+            utilisations=(0.01, 0.5),
+        )
+        for _, answer in curve:
+            self.assertEqual(answer.jobs_per_repetition, 2000)
 
 
 class SnapshotAndIntegral(unittest.TestCase):
@@ -189,6 +256,7 @@ class IdleTerm(unittest.TestCase):
             gpu_model="hypothetical quiet card",
             benchmark="matmul",
             config_id=MATMUL_1080TI.config_id,
+            inner_iters=2000,
             energy_j_per_job=MATMUL_A4000.energy_j_per_job,
             runtime_s_per_job=MATMUL_A4000.runtime_s_per_job,
             idle_w=MATMUL_1080TI.idle_w - 25.0,
@@ -225,6 +293,7 @@ class IdleSuppression(unittest.TestCase):
             gpu_model="quieter card",
             benchmark="matmul",
             config_id=MATMUL_1080TI.config_id,
+            inner_iters=2000,
             energy_j_per_job=MATMUL_A4000.energy_j_per_job,
             runtime_s_per_job=MATMUL_A4000.runtime_s_per_job,
             idle_w=MATMUL_1080TI.idle_w - gap_w,
@@ -396,6 +465,7 @@ class VarianceGuard(unittest.TestCase):
             gpu_model="NVIDIA RTX A4000 (twin)",
             benchmark="matmul",
             config_id=MATMUL_1080TI.config_id,
+            inner_iters=2000,
             energy_j_per_job=MATMUL_1080TI.energy_j_per_job * 0.97,
             runtime_s_per_job=MATMUL_1080TI.runtime_s_per_job,
             idle_w=MATMUL_1080TI.idle_w,
@@ -462,6 +532,7 @@ class Degenerate(unittest.TestCase):
             gpu_model="NVIDIA L4",
             benchmark="matmul",
             config_id="matmul|n8192|fp32|i500|s20260818",
+            inner_iters=500,
             energy_j_per_job=44.5,
             runtime_s_per_job=0.1,
             idle_w=20.0,
@@ -477,6 +548,7 @@ class Degenerate(unittest.TestCase):
             gpu_model="NVIDIA RTX A4000",
             benchmark="matmul",
             config_id=MATMUL_1080TI.config_id,
+            inner_iters=2000,
             energy_j_per_job=14.0,
             runtime_s_per_job=0.1,
             idle_w=25.0,
@@ -518,6 +590,7 @@ class Curve(unittest.TestCase):
             gpu_model="twin",
             benchmark="matmul",
             config_id=MATMUL_1080TI.config_id,
+            inner_iters=2000,
             energy_j_per_job=MATMUL_1080TI.energy_j_per_job * 0.99,
             runtime_s_per_job=MATMUL_1080TI.runtime_s_per_job,
             idle_w=MATMUL_1080TI.idle_w,
