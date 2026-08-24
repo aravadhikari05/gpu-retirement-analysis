@@ -1090,10 +1090,71 @@ measured split, host systems approx 75% of a node's embodied carbon against
 approx 25% for all its GPUs combined, is the citation for that arm.
 
 
-Grid intensity presets remain unsourced placeholders, kg CO2 per kWh: CAISO
-approx 0.200, US national average approx 0.390, ERCOT approx 0.400, PJM approx
-0.550. Because they are unsourced, every figure `carbon_model.py` produces is
-still labelled provisional even though the embodied half is now sourced.
+### Grid intensity: sourced 2026-08-23 from EPA eGRID2023
+
+`analysis/grid_intensity.py` owns the numbers. **The four placeholders are
+withdrawn**: CAISO 0.200, US average 0.390, ERCOT 0.400 and PJM 0.550 came from
+an uncited spec draft, and three of the four were high.
+
+**Both halves of the inequality are now sourced, so `carbon_model.py` prints
+`[sourced]` rather than `[PROVISIONAL]` and no longer needs
+`--allow-unsourced`.** That flag remains for what-if overrides.
+
+kg CO2e per kWh, eGRID2023 rev. 2 Table 1 total output rates:
+
+| eGRID subregion | kg CO2e/kWh | was |
+|---|---|---|
+| CAMX (WECC California) | 0.1950 | 0.200 as "CAISO" |
+| ERCT (ERCOT All) | 0.3341 | 0.400 as "ERCOT" |
+| RFCE (RFC East) | 0.2718 | 0.550 as "PJM" |
+| RFCM (RFC Michigan) | 0.4427 | not present |
+| RFCW (RFC West) | 0.4155 | not present |
+| US national average | 0.3497 | 0.390 |
+
+Three decisions had to be made before any number could be looked up, and each is
+stated in the module docstring rather than left implicit.
+
+- **CO2e, not CO2**, so the operational side matches embodied carbon's units.
+  The field was renamed `kg_co2e_per_kwh` accordingly; it previously read
+  `kg_co2_per_kwh` while being compared against a CO2e embodied figure.
+- **Average, not marginal.** A replacement changes load at the margin, so a
+  marginal rate is arguably more correct. Total output rates are used anyway,
+  because they are eGRID's headline figure and what comparable work uses, and
+  because they are conservative: eGRID's own non-baseload rate, its proxy for
+  marginal generation, is **roughly 2x higher in every region here**, so using
+  it would roughly halve every payback threshold. Those figures ship as
+  `NONBASELOAD` for the Phase 9 sensitivity arm rather than being discarded.
+- **Generation at the busbar, not consumption at the plug.** Output rates are
+  measured where the generator meets the grid, while a GPU draws after
+  transmission and distribution losses, which eGRID reports at 4.1 to 4.2% here.
+  The correction is not applied, understating avoided carbon by about 4%.
+
+All three choices point the same way, so the reported thresholds are pessimistic
+about replacement, which matches the direction of the measurement biases.
+
+**"PJM" is refused rather than guessed.** It is a market operator, not an eGRID
+subregion, and it spans RFCE, RFCM and RFCW, which range from 0.27 to 0.44 and
+differ by about 1.6x. `preset("PJM")` raises and names the three. `CAISO` and
+`ERCOT` survive as aliases for CAMX and ERCT, which are near-exact matches.
+
+**The correction matters most where the placeholder was worst.** Payback
+thresholds computed against the old numbers were optimistic by 1.03x at CAMX,
+1.12x at the US average, 1.20x at ERCT and **2.02x for PJM against RFCE**.
+
+Conversion, written down because dropping it is a factor of 2204.62 that still
+looks plausible: `kg_co2e_per_kwh = lb_co2e_per_mwh * 0.45359237 / 1000`.
+`from_lb_per_mwh()` implements it and a test pins it.
+
+Source: EPA eGRID2023 rev. 2 (June 2025), summary Table 1, read off the primary
+workbook rather than a summary page.
+<https://www.epa.gov/system/files/documents/2025-06/summary_tables_rev2.xlsx>
+
+**Still unsourced: the forward decline rate.** `EXAMPLE_ANNUAL_DECLINE` is 0.03
+and is not used by default, since `annual_decline` defaults to 0.0 and the
+presets are a flat present-day snapshot. Phase 9 owns replacing it, and the
+source to use is **NREL Cambium**, which publishes projected emission factors to
+2050 in both average and long-run marginal forms, covering this constant and the
+marginal arm at once.
 
 ## Break-even model
 

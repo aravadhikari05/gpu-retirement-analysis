@@ -249,10 +249,8 @@ end to end.
 |---|---|---|
 | Embodied per GPU, card level | 5.7 to 26.7 kg CO2e depending on card | **sourced**, ACT bottom-up, `data/embodied/`. Every constant checked against the ACT paper and reference implementation; two deviations recorded in `CLAUDE.md` |
 | GDDR embodied intensity | 0.065 kg CO2e per GB | sourced (LLMCarbon), but **contested**: EcoServe Table I says 0.36 for GDDR6. Kept, reported as a sensitivity |
-| CAISO grid intensity | approx 0.200 kg CO2/kWh | unsourced |
-| US national average | approx 0.390 | unsourced |
-| ERCOT | approx 0.400 | unsourced |
-| PJM | approx 0.550 | unsourced |
+| Grid intensity, 6 eGRID subregions | 0.1950 to 0.4427 kg CO2e/kWh | **sourced** 2026-08-23, EPA eGRID2023 rev. 2 Table 1. Replaces the four placeholders; three were high, PJM by 2.02x |
+| Forward decline rate | 0.03 per year | unsourced, unused by default. Phase 9, from NREL Cambium |
 | GTX 1080 Ti bandwidth | 484 GB/s | derived, bus width also unverified |
 | RTX 4090 bandwidth | 1008 GB/s | derived, NVIDIA publishes none |
 

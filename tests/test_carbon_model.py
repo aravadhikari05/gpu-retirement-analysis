@@ -31,7 +31,13 @@ from analysis.carbon_model import (
     load_embodied,
     payback_curve,
 )
-from analysis.grid_intensity import PRESETS, GridIntensity, preset
+from analysis.grid_intensity import (
+    NONBASELOAD,
+    PRESETS,
+    GridIntensity,
+    from_lb_per_mwh,
+    preset,
+)
 
 # Measured, matmul|n8192|fp32|i2000|s20260818, 2026-08-23. energy_j_per_inner_iter
 # and idle_post_context_avg_w_mean straight out of energy_by_gpu.csv; the
@@ -98,7 +104,7 @@ class Units(unittest.TestCase):
     def test_conversion_is_not_dropped(self):
         # Without the division this would be 3.6e6 times larger. Assert the
         # magnitude, so a dropped conversion cannot pass by rounding.
-        saved = carbon_saved_kg(1.0, 1.0, PRESETS["CAISO"])
+        saved = carbon_saved_kg(1.0, 1.0, PRESETS["CAMX"])
         self.assertLess(saved, 1e-6)
         self.assertGreater(saved, 0.0)
 
@@ -106,7 +112,7 @@ class Units(unittest.TestCase):
         # Real delta from the fleet pass: 31.9628... - 14.3241... J per job.
         delta = MATMUL_1080TI.energy_j_per_job - MATMUL_A4000.energy_j_per_job
         self.assertAlmostEqual(delta, 17.638737111129963, places=9)
-        expected_jobs = 100.0 * J_PER_KWH / (delta * 0.200)
+        expected_jobs = 100.0 * J_PER_KWH / (delta * CAISO.kg_co2e_per_kwh)
         answer = break_even_jobs(PLACEHOLDER, MATMUL_1080TI, MATMUL_A4000, CAISO)
         self.assertAlmostEqual(answer.jobs, expected_jobs, places=3)
 
@@ -186,10 +192,12 @@ class SnapshotAndIntegral(unittest.TestCase):
 
     def test_constant_grid_makes_cumulative_intensity_linear(self):
         flat = preset("CAISO")
-        self.assertAlmostEqual(cumulative_intensity(flat, 5), 5 * 0.200, places=12)
+        self.assertAlmostEqual(
+            cumulative_intensity(flat, 5), 5 * flat.kg_co2e_per_kwh, places=12
+        )
 
     def test_declining_grid_pushes_break_even_out(self):
-        flat = preset("PJM")
+        flat = preset("RFCE")
         declining = flat.with_decline(0.05)
         near = break_even_jobs(
             PLACEHOLDER, MATMUL_1080TI, MATMUL_A4000, flat, horizon_years=6
@@ -366,9 +374,10 @@ class Phase7Inputs(unittest.TestCase):
     def test_sourced_embodied_still_provisional_while_grid_is_not(self):
         table = load_embodied()
         embodied = table[_normalise_gpu_model("NVIDIA RTX A4000")]
-        answer = break_even_jobs(embodied, MATMUL_1080TI, MATMUL_A4000, CAISO)
+        unsourced = GridIntensity("hypothetical", 0.3, sourced=False)
+        answer = break_even_jobs(embodied, MATMUL_1080TI, MATMUL_A4000, unsourced)
         self.assertTrue(embodied.sourced)
-        self.assertFalse(CAISO.sourced)
+        self.assertFalse(unsourced.sourced)
         self.assertTrue(answer.provisional, "grid alone must keep it provisional")
 
     def test_missing_table_raises_with_a_pointer(self):
@@ -493,7 +502,8 @@ class Provenance(unittest.TestCase):
         self.assertTrue(any(n.startswith("PROVISIONAL") for n in answer.notes))
 
     def test_unsourced_grid_taints_result(self):
-        answer = break_even_jobs(SOURCED, MATMUL_1080TI, MATMUL_A4000, CAISO)
+        unsourced = GridIntensity("hypothetical", 0.3, sourced=False)
+        answer = break_even_jobs(SOURCED, MATMUL_1080TI, MATMUL_A4000, unsourced)
         self.assertTrue(answer.provisional)
 
     def test_both_sourced_is_not_provisional(self):
@@ -506,10 +516,14 @@ class Provenance(unittest.TestCase):
         with self.assertRaises(ValueError):
             GridIntensity("region", 0.2, sourced=True)
 
-    def test_every_shipped_preset_is_unsourced(self):
-        # If one of these ever reads True without a citation, the guard is gone.
-        for name, grid in PRESETS.items():
-            self.assertFalse(grid.sourced, f"{name} claims to be sourced")
+    def test_every_shipped_preset_is_sourced_and_cited(self):
+        # Sourced 2026-08-23 from eGRID2023. The invariant that matters is not
+        # the flag but the pairing: sourced with no citation is the silent
+        # failure GridIntensity refuses at construction, and this pins that the
+        # shipped presets actually carry one.
+        for name, grid in list(PRESETS.items()) + list(NONBASELOAD.items()):
+            self.assertTrue(grid.sourced, f"{name} lost its sourced flag")
+            self.assertIn("eGRID", grid.citation, f"{name} has no eGRID citation")
 
     def test_inverted_embodied_range_refused(self):
         with self.assertRaises(ValueError):
@@ -645,9 +659,40 @@ class Curve(unittest.TestCase):
 
 class GridPresets(unittest.TestCase):
     def test_decline_reduces_intensity_over_time(self):
-        grid = preset("PJM").with_decline(0.10)
-        self.assertAlmostEqual(grid.at_year(0), 0.550, places=12)
-        self.assertAlmostEqual(grid.at_year(1), 0.550 * 0.9, places=12)
+        base = preset("RFCE")
+        grid = base.with_decline(0.10)
+        self.assertAlmostEqual(grid.at_year(0), base.kg_co2e_per_kwh, places=12)
+        self.assertAlmostEqual(grid.at_year(1), base.kg_co2e_per_kwh * 0.9, places=12)
+
+    def test_pjm_is_refused_because_it_spans_three_subregions(self):
+        with self.assertRaises(KeyError) as caught:
+            preset("PJM")
+        for sub in ("RFCE", "RFCM", "RFCW"):
+            self.assertIn(sub, str(caught.exception))
+
+    def test_iso_aliases_resolve_to_egrid_subregions(self):
+        self.assertIs(preset("CAISO"), PRESETS["CAMX"])
+        self.assertIs(preset("ERCOT"), PRESETS["ERCT"])
+        self.assertIs(preset("us average"), PRESETS["US"])
+
+    def test_lb_per_mwh_conversion(self):
+        # 1 lb/MWh is 0.45359237 kg per 1000 kWh. A dropped conversion is a
+        # factor of 2204.62 that still looks like a plausible intensity.
+        self.assertAlmostEqual(from_lb_per_mwh(2204.622621848776), 1.0, places=9)
+        self.assertAlmostEqual(
+            from_lb_per_mwh(429.983), PRESETS["CAMX"].kg_co2e_per_kwh, places=12
+        )
+        with self.assertRaises(ValueError):
+            from_lb_per_mwh(0.0)
+
+    def test_non_baseload_exceeds_total_output_everywhere(self):
+        # eGRID's marginal proxy. It is roughly 2x the average rate, which is
+        # why choosing the average rate is the conservative option and why the
+        # choice has to be stated rather than assumed.
+        for key, grid in PRESETS.items():
+            marginal = NONBASELOAD[key]
+            self.assertGreater(marginal.kg_co2e_per_kwh, grid.kg_co2e_per_kwh, key)
+            self.assertTrue(marginal.sourced)
 
     def test_with_decline_preserves_provenance(self):
         grid = SOURCED_GRID.with_decline(0.04)

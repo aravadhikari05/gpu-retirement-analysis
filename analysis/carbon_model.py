@@ -524,7 +524,7 @@ def cumulative_intensity(grid: GridIntensity, horizon_years: int) -> float:
       horizon_years: Number of whole years, at least 1.
 
     Returns:
-      Sum of kg CO2 per kWh over the horizon.
+      Sum of kg CO2e per kWh over the horizon.
 
     Raises:
       ValueError: If horizon_years is below 1.
@@ -558,7 +558,7 @@ def carbon_saved_kg(
       Carbon avoided, kg CO2e. Negative when the new card uses more.
     """
     if horizon_years is None:
-        return (delta_energy_j * jobs / J_PER_KWH) * grid.kg_co2_per_kwh
+        return (delta_energy_j * jobs / J_PER_KWH) * grid.kg_co2e_per_kwh
     # Jobs spread evenly, so each year contributes its own intensity to an equal
     # share of the work. Summing intensity and dividing the jobs by the horizon
     # is the same thing and avoids a loop over jobs.
@@ -686,7 +686,7 @@ def break_even_jobs(
         delta = old.energy_j_per_job - new.energy_j_per_job
         if delta <= 0:
             return _never(provisional, interpretable, notes, old, new, None)
-        jobs = embodied_kg * J_PER_KWH / (delta * grid.kg_co2_per_kwh)
+        jobs = embodied_kg * J_PER_KWH / (delta * grid.kg_co2e_per_kwh)
         return BreakEven(
             jobs=jobs,
             jobs_per_repetition=old.inner_iters,
@@ -960,7 +960,13 @@ def main() -> None:
         description="Carbon break-even between keeping an old GPU and replacing it."
     )
     parser.add_argument("--energy-table", default=DEFAULT_ENERGY_BY_GPU)
-    parser.add_argument("--grid", default="CAISO", help="grid region preset")
+    parser.add_argument(
+        "--grid",
+        default="CAMX",
+        help="eGRID subregion (CAMX, ERCT, RFCE, RFCM, RFCW, US) or an alias "
+        "such as CAISO or ERCOT. PJM is not accepted: it spans three "
+        "subregions that differ by about 1.6x.",
+    )
     parser.add_argument(
         "--embodied-table",
         default=DEFAULT_EMBODIED,
@@ -1057,7 +1063,7 @@ def main() -> None:
         embodied_label = f"Phase 7 {args.embodied_table}"
 
     print(
-        f"grid={grid.name} {grid.kg_co2_per_kwh} kg/kWh "
+        f"grid={grid.name} {grid.kg_co2e_per_kwh:.4f} kg CO2e/kWh "
         f"decline={grid.annual_decline:.1%}/y  "
         f"embodied={embodied_label}  "
         f"horizon={'snapshot' if horizon is None else str(horizon) + ' y'}"

@@ -24,9 +24,9 @@ Phase 7 landed on 2026-08-23 (Veda, `b98dbe1`) and Phase 8 was built the same da
 (Aidan, `aab7021`..`e415ac6`). **The pipeline is end to end**: measured energy,
 sourced embodied carbon, and a break-even model with tests.
 
-**The critical path is now sourcing grid intensity**, which is the last
-placeholder in the model and the reason every figure prints `[PROVISIONAL]`.
-After that, Phase 9.
+Grid intensity was sourced on 2026-08-23 from EPA eGRID2023, so **both halves of
+the inequality are now cited** and `carbon_model.py` prints `[sourced]`. The
+figures are quotable. **The critical path is now Phase 9**, sensitivity.
 
 **Nothing below is blocked on more GPU time.** The critical path is desk work.
 
@@ -184,15 +184,20 @@ Items 3 and 4 are unblocked.
 
 Three residuals, none blocking, all cheap:
 
-- **Grid intensity is still unsourced, and it is now the critical path.** CAISO
-  0.200, US average 0.390, ERCOT 0.400, PJM 0.550 came from the same uncited
-  spec draft; Phase 7 did not touch them and Phase 8 carried them over into
-  `analysis/grid_intensity.py`. **This is the last unsourced input in the
-  model** and the sole reason `carbon_model.py` requires `--allow-unsourced` and
-  stamps `[PROVISIONAL]` on every line. Nothing the project has computed is
-  quotable until it is fixed, and it needs no cluster access. Phase 9 also
-  projects these forward, so provenance matters more than a single-year figure
-  suggests.
+- **Grid intensity: DONE 2026-08-23, from EPA eGRID2023 rev. 2.** Six eGRID
+  subregions at their CO2e total output rates, CAMX 0.1950 through RFCM 0.4427,
+  US average 0.3497. Three placeholders were high, PJM by 2.02x. The field was
+  renamed `kg_co2e_per_kwh` because it was being compared against a CO2e
+  embodied figure while named CO2. "PJM" is now refused rather than guessed,
+  since it spans three subregions differing by 1.6x. Full reasoning, including
+  average-against-marginal and the busbar-against-plug choice, in `CLAUDE.md`
+  under Grid intensity.
+- **The forward decline rate is the one number still uncited.**
+  `EXAMPLE_ANNUAL_DECLINE = 0.03`. It is not used by default, so nothing
+  currently printed depends on it, but Phase 9 does. **Use NREL Cambium**
+  (<https://www.nrel.gov/analysis/cambium.html>): it publishes projected
+  emission factors to 2050 in both average and long-run marginal forms, which
+  covers this constant and the marginal sensitivity arm in one download.
 - **The memory coefficient is contested, not unsourced.** Ours is 0.065 kg per
   GB (LLMCarbon); EcoServe Table I puts GDDR6 at 0.36 (TechInsights), with its
   DDR4, HBM2 and HBM3e all in the 0.24 to 0.36 band. Both sit inside ACT's

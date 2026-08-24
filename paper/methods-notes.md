@@ -490,27 +490,35 @@ zero, not that a particular card idles lower.
 ## Break-even survives the full adversarial case
 
 Computed 2026-08-23 by `analysis/carbon_model.py` from the fleet pass energy
-measurements and the Phase 7 embodied estimates. **Provisional**: grid intensity
-is still an unsourced placeholder.
+measurements and the Phase 7 embodied estimates. **Both halves are now sourced**,
+embodied from ACT and grid intensity from EPA eGRID2023, so these figures are no
+longer provisional. Recomputed at the eGRID rate on 2026-08-23; the earlier
+version of this table used an uncited 0.200 placeholder, which moved the numbers
+by about 3%.
 
 The pair that matters is **matmul, GTX 1080 Ti to RTX A4000**, 2017 hardware
 against 2021. The 1080 Ti to 2080 Ti pair is 2017 against 2018 and is not a
 retirement decision anyone faces; it is reported for completeness only.
 
 The figure below is **active hours per year** the replacement must run before it
-repays its own manufacturing carbon. CAISO at 0.200 kg CO2/kWh, six year
-horizon, grid held flat.
+repays its own manufacturing carbon. eGRID subregion **CAMX (WECC California) at
+0.1950 kg CO2e/kWh**, six year horizon, grid held flat.
+
+CAMX is the lowest-carbon region in the preset set, which makes it the hardest
+case for replacement: less carbon avoided per joule saved means a longer payback.
+At the US national average of 0.3497 the thresholds are roughly 1.8x shorter.
 
 ### Stacking every bias that favours replacement
 
 | Assumption | Embodied kg | Break-even h/y | Share of a year |
 |---|---|---|---|
-| As published (CPA 1.0 to 3.0, die+gddr) | 5.7 to 14.6 | 29 to 75 | 0.3% to 0.9% |
-| Node-differentiated CPA, 8nm at 2.5 to 3.0 | 12.4 to 14.6 | 64 to 75 | 0.7% to 0.9% |
-| Plus full-card BOM, x2 to x3 | 24.8 to 43.9 | 128 to 226 | 1.5% to 2.6% |
+| As published (CPA 1.0 to 3.0, die+gddr) | 5.7 to 14.6 | 30 to 77 | 0.3% to 0.9% |
+| Node-differentiated CPA, 8nm at 2.5 to 3.0 | 12.4 to 14.6 | 66 to 77 | 0.7% to 0.9% |
+| Plus full-card BOM, x2 to x3 | 24.8 to 43.9 | 131 to 232 | 1.5% to 2.6% |
 
 **At the worst corner, every bias at its worst simultaneously, replacement still
-repays itself at 2.6% of a year of active use.**
+repays itself at 2.6% of a year of active use, and that is in the
+lowest-carbon grid region measured.**
 
 That is the headline, and it is a stronger claim than a conditional one:
 replacement pays back under every assumption we can currently defend. The
